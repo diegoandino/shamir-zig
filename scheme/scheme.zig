@@ -1,6 +1,6 @@
 const std = @import("std");
 const Managed = std.math.big.int.Managed;
-const Mutable = std.math.big.int.Mutable;
+// const Mutable = std.math.big.int.Mutable;
 const rand = std.crypto.random;
 
 pub fn main() !void {
@@ -89,7 +89,7 @@ const ShamirsSecretSharingScheme = struct {
         coeffs[0] = secret;
         var i: usize = 1;
         while (i < coeffs.len) : (i += 1) {
-            coeffs[i] = try self.mod(try generateSecureRandomBigInt(self.allocator, 512), self.prime);
+            coeffs[i] = try self.sample_finite_field();
         }
         return coeffs;
     }
@@ -99,6 +99,15 @@ const ShamirsSecretSharingScheme = struct {
         var r = try Managed.initSet(self.allocator, 0);
         try Managed.divFloor(&q, &r, &a, &b);
         q.deinit();
+        return r;
+    }
+
+    fn sample_finite_field(self: ShamirsSecretSharingScheme) !Managed {
+        var r = try generateSecureRandomBigInt(self.allocator, self.prime.bitCountAbs());
+        while (Managed.order(r, self.prime) != std.math.Order.lt) {
+            r.deinit();
+            r = try generateSecureRandomBigInt(self.allocator, self.prime.bitCountAbs());
+        }
         return r;
     }
 };
@@ -127,8 +136,12 @@ fn generateSecureRandomBigInt(allocator: std.mem.Allocator, bits: usize) !std.ma
     // Fill with crypto secure random data
     std.crypto.random.bytes(random_bytes);
 
-    // must be an integer number of bytes
-    std.debug.assert(bits % 8 == 0);
+    const extraBits: u3 = @intCast(bits % 8);
+    if (extraBits != 0) {
+        const one: u8 = 1;
+        const bitMask = ((one << extraBits) - 1);
+        random_bytes[0] &= bitMask;
+    }
 
     // Convert bytes to BigInt
     const hex_str = try std.fmt.allocPrint(
