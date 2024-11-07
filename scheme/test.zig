@@ -1,41 +1,4 @@
 const std = @import("std");
-const Managed = std.math.big.int.Managed; 
-const Mutable = std.math.big.int.Mutable; 
-const rand = std.crypto.random;
-
-pub fn main() !void {
-    // Setup allocator
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-    
-    const stdout = std.io.getStdOut().writer();
-
-    var i: usize = 0;
-    while (i < 1000) : (i += 1) {
-        var random_big = try generateSecureRandomBigInt(allocator, 256);
-        defer random_big.deinit(); 
-        try stdout.print("Random {d}: {any}\n", .{ i + 1, random_big });
-    }    
-}
-
-const ShamirsSecretSharingScheme = struct {
-    threshold: u8, 
-    num_shares: u8, 
-    secret: Managed
-};
-
-const Share = struct {
-    x:Mutable,
-    y:Mutable
-};
-
-// compute shares
-pub fn compute_shares() u64 {
-    //var coefficients = []Mutable{secret};
-    const num = rand.int(Mutable);
-    return num;
-}
 
 /// Generates a cryptographically secure random BigInt of specified bit length
 fn generateSecureRandomBigInt(allocator: std.mem.Allocator, bits: usize) !std.math.big.int.Managed {
@@ -54,7 +17,7 @@ fn generateSecureRandomBigInt(allocator: std.mem.Allocator, bits: usize) !std.ma
     
     // If bits isn't a multiple of 8, mask the extra bits in the first byte
     if (bits % 8 != 0) {
-       std.debug.print("Bit is not mult. of 8", .{}); 
+        std.debug.print("error mult 8", .{});        
     }
     
     // Convert bytes to BigInt
@@ -63,9 +26,30 @@ fn generateSecureRandomBigInt(allocator: std.mem.Allocator, bits: usize) !std.ma
         "{s}",
         .{std.fmt.fmtSliceHexUpper(random_bytes)},
     );
+    defer allocator.free(hex_str);
+    
     try result.setString(16, hex_str);
     
     return result;
+}
+
+pub fn main() !void {
+    // Setup allocator
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+    
+    const stdout = std.io.getStdOut().writer();
+    
+    // Demonstrate generating multiple random numbers of the same size
+    try stdout.writeAll("\nGenerating multiple 256-bit random numbers:\n\n");
+    
+    var i: usize = 0;
+    while (i < 1000) : (i += 1) {
+        var random_big = try generateSecureRandomBigInt(allocator, 256);
+        defer random_big.deinit();
+        try stdout.print("Random {d}: {any}\n", .{ i + 1, random_big });
+    }
 }
 
 test "verify random bigint properties" {
