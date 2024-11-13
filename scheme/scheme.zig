@@ -2,19 +2,20 @@ const std = @import("std");
 const Managed = std.math.big.int.Managed;
 // const Mutable = std.math.big.int.Mutable;
 const rand = std.crypto.random;
+const stdout = std.io.getStdOut().writer();
 
 pub fn main() !void {
     const allocator = std.heap.c_allocator;
 
-    const stdout = std.io.getStdOut().writer();
-
-    const p = try Managed.initSet(allocator, 31);
-    const secret = try Managed.initSet(allocator, 10);
+    // testing some large prime with large secret
+    // this is also a generated 256-bit prime
+    const p = try Managed.initSet(allocator, 115792089237316195423570985008687907853269984665640564039457584007913129640233);
+    const secret = try Managed.initSet(allocator, 950_000_000_000_000_000);
 
     try stdout.print("prime: {d}\n", .{p});
     try stdout.print("secret: {d}\n", .{secret});
 
-    var SSSS = ShamirsSecretSharingScheme.init(allocator, 3, 5, p);
+    var SSSS = ShamirsSecretSharingScheme.init(allocator, 49, 50, p);
     defer SSSS.deinit();
 
     const shares = try SSSS.compute_shares(secret);
@@ -24,6 +25,18 @@ pub fn main() !void {
     for (shares) |share| {
         try stdout.print("({d}, {any})\n", .{ share.x, share.y });
     }
+
+    // Take any threshold number of shares
+    const reconstruction_shares = shares[0..SSSS.threshold];
+
+    // Reconstruct the secret
+    const reconstructed_secret = try SSSS.reconstruct_secret(reconstruction_shares);
+    defer reconstructed_secret.deinit();
+
+    try stdout.print("\nReconstructed secret: {d}\n", .{reconstructed_secret});
+
+    // Verify reconstruction
+    try stdout.print("Original secret: {d}\n", .{secret});
 }
 
 const Share = struct {
@@ -110,10 +123,143 @@ const ShamirsSecretSharingScheme = struct {
         }
         return r;
     }
+
+    pub fn reconstruct_secret(self: ShamirsSecretSharingScheme, shares: []const Share) !*Managed {
+        // Verify we have enough shares
+        if (shares.len < self.threshold) {
+            return error.NotEnoughShares;
+        }
+
+        // Initialize result
+        var result = try self.allocator.create(Managed);
+        errdefer self.allocator.destroy(result);
+        result.* = try Managed.initSet(self.allocator, 0);
+        errdefer result.deinit();
+
+        for (shares[0..self.threshold], 0..) |share_i, i| {
+            // Calculate lagrange basis poly
+            var basis = try Managed.initSet(self.allocator, 1);
+            defer basis.deinit();
+
+            for (shares[0..self.threshold], 0..) |share_j, j| {
+                if (i == j) continue;
+
+                var numerator = try Managed.initSet(self.allocator, 0);
+                defer numerator.deinit();
+
+                var x_j = try Managed.initSet(self.allocator, share_j.x);
+                defer x_j.deinit();
+                try Managed.sub(&numerator, &numerator, &x_j);
+
+                var denominator = try Managed.initSet(self.allocator, share_i.x);
+                defer denominator.deinit();
+                var x_i = try Managed.initSet(self.allocator, share_j.x);
+                defer x_i.deinit();
+                try Managed.sub(&denominator, &denominator, &x_i);
+
+                var inv_denominator = try self.mod_inverse(denominator);
+                defer inv_denominator.deinit();
+
+                try Managed.mul(&basis, &basis, &numerator);
+                try Managed.mul(&basis, &basis, &inv_denominator);
+
+                const mod_result = try self.mod(basis, self.prime);
+                basis.deinit();
+                basis = mod_result;
+            }
+
+            var term = try Managed.initSet(self.allocator, 0);
+            defer term.deinit();
+            try Managed.mul(&term, &basis, &share_i.y);
+            try Managed.add(result, result, &term);
+
+            const mod_result = try self.mod(result.*, self.prime);
+            result.deinit();
+            result.* = mod_result;
+        }
+
+        return result;
+    }
+
+    fn mod_inverse(self: ShamirsSecretSharingScheme, num: Managed) !Managed {
+        var num1 = try num.clone();
+        if (!num.isPositive()) {
+            try Managed.add(&num1, &num1, &self.prime);
+        }
+
+        const result = try self.extend_euclid_algo(num1);
+        return result.inv;
+    }
+
+    const ExtendedEuclidResult = struct {
+        gcd: Managed,
+        s: Managed,
+        inv: Managed,
+    };
+
+    fn extend_euclid_algo(self: ShamirsSecretSharingScheme, num: Managed) !ExtendedEuclidResult {
+        var r = try self.prime.clone();
+        var next_r = try num.clone();
+        var s = try Managed.initSet(self.allocator, 1);
+        var next_s = try Managed.initSet(self.allocator, 0);
+        var t = try Managed.initSet(self.allocator, 0);
+        var next_t = try Managed.initSet(self.allocator, 1);
+
+        while (!next_r.eqlZero()) {
+            var quotient = try Managed.initSet(self.allocator, 0);
+            var remainder = try Managed.initSet(self.allocator, 0);
+            try Managed.divFloor(&quotient, &remainder, &r, &next_r);
+
+            const tmp_r = try next_r.clone();
+            next_r.deinit();
+            next_r = remainder;
+            r.deinit();
+            r = tmp_r;
+
+            const tmp_s = try next_s.clone();
+            var quotient_mul_next_s = try Managed.initSet(self.allocator, 0);
+            try Managed.mul(&quotient_mul_next_s, &quotient, &next_s);
+            try Managed.sub(&next_s, &s, &quotient_mul_next_s);
+            s.deinit();
+            s = tmp_s;
+            quotient_mul_next_s.deinit();
+
+            const tmp_t = try next_t.clone();
+            var quotient_mul_next_t = try Managed.initSet(self.allocator, 0);
+            try Managed.mul(&quotient_mul_next_t, &quotient, &next_t);
+            try Managed.sub(&next_t, &t, &quotient_mul_next_t);
+            t.deinit();
+            t = tmp_t;
+            quotient_mul_next_t.deinit();
+
+            quotient.deinit();
+        }
+
+        // If r > 1, then a and m are not coprime and modular inverse does not exist
+        var one = try Managed.initSet(self.allocator, 1);
+        defer one.deinit();
+        if (Managed.order(r, one) != .eq) {
+            return error.NoModularInverse;
+        }
+
+        // Make t positive and ensure it's less than prime
+        while (!t.isPositive()) {
+            try Managed.add(&t, &t, &self.prime);
+        }
+
+        while (Managed.order(t, self.prime) != .lt) {
+            try Managed.sub(&t, &t, &self.prime);
+        }
+
+        return ExtendedEuclidResult{
+            .gcd = r,
+            .s = s,
+            .inv = t,
+        };
+    }
 };
 
 fn printPolynomial(poly: []Managed) !void {
-    const stdout = std.io.getStdOut().writer();
     try stdout.print("polynomial:\n", .{});
     for (poly, 0..) |coeff, i| {
         try stdout.print(" + {any}*x^{d}", .{ coeff, i });
