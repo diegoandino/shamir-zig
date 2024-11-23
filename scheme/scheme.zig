@@ -6,16 +6,18 @@ const stdout = std.io.getStdOut().writer();
 
 pub fn main() !void {
     const allocator = std.heap.c_allocator;
+    
+    var secret = try Managed.initSet(allocator, 189_389);
+    defer secret.deinit();
 
-    // testing some large prime with large secret
-    // this is also a generated 256-bit prime
-    const p = try Managed.initSet(allocator, 115792089237316195423570985008687907853269984665640564039457584007913129640233);
-    const secret = try Managed.initSet(allocator, 950_000_000_000_000_000);
+    var p = try findNextPrime(allocator, secret);
+    defer p.deinit();
+    
+    //const p = try Managed.initSet(allocator, 115792089237316195423570985008687907853269984665640564039457584007913129640233);
 
-    try stdout.print("prime: {d}\n", .{p});
-    try stdout.print("secret: {d}\n", .{secret});
-
-    var SSSS = ShamirsSecretSharingScheme.init(allocator, 49, 50, p);
+    try stdout.print("Prime: {any}\n", .{p});
+    
+    var SSSS = ShamirsSecretSharingScheme.init(allocator, 7, 10, p);
     defer SSSS.deinit();
 
     const shares = try SSSS.compute_shares(secret);
@@ -69,7 +71,7 @@ const ShamirsSecretSharingScheme = struct {
         const polynomial = try self.sample_random_polynomial(secret);
         defer self.allocator.free(polynomial);
 
-        try printPolynomial(polynomial);
+        //try printPolynomial(polynomial);
 
         var shares = try self.allocator.alloc(Share, self.num_shares);
         var i: usize = 0;
@@ -300,6 +302,77 @@ fn generateSecureRandomBigInt(allocator: std.mem.Allocator, bits: usize) !std.ma
     try result.setString(16, hex_str);
 
     return result;
+}
+
+/// Finds the smallest prime number larger than the input secret
+pub fn findNextPrime(allocator: std.mem.Allocator, secret: Managed) !Managed {
+    // Initialize the numbers we'll need
+    var candidate = try secret.clone();
+    errdefer candidate.deinit();
+    
+    var one = try Managed.initSet(allocator, 1);
+    defer one.deinit();
+    
+    var two = try Managed.initSet(allocator, 2);
+    defer two.deinit();
+
+    // Add 1 to start checking from next number
+    try Managed.add(&candidate, &candidate, &one);
+
+    // Make odd if even
+    if (!candidate.isOdd()) {
+        try Managed.add(&candidate, &candidate, &one);
+    }
+
+    // Keep checking odd numbers until we find a prime
+    while (true) {
+        if (try isProbablyPrime(allocator, candidate)) {
+            return candidate;
+        }
+        try Managed.add(&candidate, &candidate, &two);
+    }
+}
+
+fn isProbablyPrime(allocator: std.mem.Allocator, n: Managed) !bool {
+    // Handle small numbers using u64
+    if (n.bitCountAbs() <= 64) {
+        const small_n = try n.to(u64);
+        if (small_n <= 1) return false;
+        if (small_n == 2 or small_n == 3) return true;
+        if (small_n % 2 == 0) return false;
+
+        // Trial division for small numbers
+        var i: u64 = 3;
+        while (i * i <= small_n) : (i += 2) {
+            if (small_n % i == 0) return false;
+        }
+        return true;
+    }
+
+    // For larger numbers, do trial division up to a small limit
+    const trial_limit: u64 = 1000;
+    var i: u64 = 3;
+
+    var zero = try Managed.initSet(allocator, 0);
+    defer zero.deinit();
+
+    while (i < trial_limit) : (i += 2) {
+        var divisor = try Managed.initSet(allocator, i);
+        defer divisor.deinit();
+        
+        var quotient = try Managed.init(allocator);
+        defer quotient.deinit();
+        var remainder = try Managed.init(allocator);
+        defer remainder.deinit();
+        
+        try Managed.divFloor(&quotient, &remainder, &n, &divisor);
+        
+        if (remainder.eql(zero)) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 test "verify random bigint properties" {
