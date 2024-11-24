@@ -144,7 +144,7 @@ io.on('connection', (socket) => {
   });
 
   // Submit vote
-  socket.on('submitVote', ({ vote }, callback) => {
+  socket.on('submitVote', async ({ vote }, callback) => {
     try {
       const member = votingState.members.find(m => m.id === socket.id);
       
@@ -164,14 +164,16 @@ io.on('connection', (socket) => {
       // Check if vote count has reached threshold
       if (Object.keys(votingState.votes).length === votingState.threshold) {
         votingState.currentStep = 4;
-        /* 
-         * init SSSS API -- secret == vote result set
-         * fetch("localhost:8000/api/init", 
-         * body { votingState.results, 
-             * votingState.threshold, 
-             * votingState.totalMembers 
-          * })
-        */
+        const initRes = await fetch('http://localhost:5882/api/init', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            secret: votingState.votes,
+            threshold: votingState.threshold,
+            total_members: votingState.totalMembers
+          })
+        });
+        console.log("init res:", initRes)
 
         // get shares from Zig API
         votingState.shares = generateShares(votingState.totalMembers);
@@ -203,9 +205,17 @@ io.on('connection', (socket) => {
       
       /* 
        * get reconstructed secret from Zig SSSS API
-       * fetch("localhost:8000/api/reconstruct", 
+       * fetch("localhost:5882/api/reconstruct", 
        * body { shares })
       */
+
+      fetch('http://localhost:4000/api/shares', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          secret: votingState.threshold,
+        })
+      });
       const results = calculateResults();
       votingState.currentStep = 5;
       
