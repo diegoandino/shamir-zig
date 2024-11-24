@@ -72,7 +72,8 @@ const Client: React.FC = () => {
   const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'connecting'>('connecting');
   const [reconnecting, setReconnecting] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
-  
+  const [sharesEntered, setSharesEntered] = useState<boolean>(false);
+
   const { toast } = useToast();
 
   // Socket.IO setup
@@ -295,6 +296,7 @@ const Client: React.FC = () => {
     }
 
     setIsRevealing(true);
+    setSharesEntered(true);
     
     try {
       socket?.emit('revealResult', { shares: validShares }, (response: { success: boolean, error?: string, result?: VoteResult }) => {
@@ -306,6 +308,7 @@ const Client: React.FC = () => {
           });
         } else {
           setRevealError(response.error || 'Failed to reveal result');
+          setSharesEntered(false); // Reset if failed
           toast({
             variant: "destructive",
             title: "Error",
@@ -315,6 +318,7 @@ const Client: React.FC = () => {
       });
     } catch (error) {
       setRevealError('Failed to reconstruct the result. Please verify your shares and try again.');
+      setSharesEntered(false); // Reset if failed
       toast({
         variant: "destructive",
         title: "Error",
@@ -344,6 +348,7 @@ const Client: React.FC = () => {
     setResult(null);
     setRevealError('');
     setErrors([]);
+    setSharesEntered(false);   
     
     toast({
       title: "Session reset",
@@ -470,7 +475,7 @@ const Client: React.FC = () => {
     </TabsContent>
   );
 
-    const renderVotingRoom = () => {
+  const renderVotingRoom = () => {
     const hasUserJoined = state.members.some(m => m.id === state.currentMemberId);
     const hasUserVoted = state.currentMemberId ? Boolean(state.votes[state.currentMemberId]) : false;
     const canProceedToShares = 
@@ -611,7 +616,7 @@ const Client: React.FC = () => {
           </AlertDescription>
         </Alert>
         
-        {!result ? (
+        {result === null && sharesEntered === false ? (
           <>
             <ScrollArea className="h-[400px] rounded-md border p-4">
               {Array.from({ length: state.threshold }, (_, i) => (
@@ -658,23 +663,23 @@ const Client: React.FC = () => {
                 <div className="flex justify-between items-center">
                   <span>Approved:</span>
                   <span className="font-bold text-green-500">
-                    {result.approved} votes ({((result.approved / result.totalVotes) * 100).toFixed(1)}%)
+                    {result?.approved!} votes ({((result?.approved! / result?.totalVotes!) * 100).toFixed(1)}%)
                   </span>
                 </div>
-                <Progress value={(result.approved / result.totalVotes) * 100} className="bg-red-200">
+                <Progress value={(result?.approved! / result?.totalVotes!) * 100} className="bg-red-200">
                   <div className="bg-green-500 h-full transition-all" />
                 </Progress>
                 <div className="flex justify-between items-center">
                   <span>Rejected:</span>
                   <span className="font-bold text-red-500">
-                    {result.rejected} votes ({((result.rejected / result.totalVotes) * 100).toFixed(1)}%)
+                    {result?.rejected!} votes ({((result?.rejected! / result?.totalVotes!) * 100).toFixed(1)}%)
                   </span>
                 </div>
               </div>
-              <Alert className={result.approved > result.rejected ? 'bg-green-100' : 'bg-red-100'}>
+              <Alert className={result?.approved! > result?.rejected! ? 'bg-green-100' : 'bg-red-100'}>
                 <AlertTitle>Final Outcome</AlertTitle>
                 <AlertDescription>
-                  The resolution has been {result.approved > result.rejected ? 'APPROVED' : 'REJECTED'} by the board.
+                  The resolution has been {result?.approved! > result?.rejected! ? 'APPROVED' : 'REJECTED'} by the board.
                 </AlertDescription>
               </Alert>
             </CardContent>

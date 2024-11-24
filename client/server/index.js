@@ -161,12 +161,23 @@ io.on('connection', (socket) => {
       votingState.votes[socket.id] = vote;
       member.hasVoted = true;
 
-      // Check if all members have voted
-      if (Object.keys(votingState.votes).length === votingState.totalMembers) {
+      // Check if vote count has reached threshold
+      if (Object.keys(votingState.votes).length === votingState.threshold) {
         votingState.currentStep = 4;
+        /* 
+         * init SSSS API -- secret == vote result set
+         * fetch("localhost:8000/api/init", 
+         * body { votingState.results, 
+             * votingState.threshold, 
+             * votingState.totalMembers 
+          * })
+        */
+
+        // get shares from Zig API
         votingState.shares = generateShares(votingState.totalMembers);
-        const results = calculateResults();
-        io.emit('votingComplete', results);
+        
+        //const results = calculateResults();
+        //io.emit('votingComplete', results);
       }
 
       broadcastState();
@@ -189,7 +200,12 @@ io.on('connection', (socket) => {
         callback?.({ success: false, error: 'Insufficient shares provided' });
         return;
       }
-
+      
+      /* 
+       * get reconstructed secret from Zig SSSS API
+       * fetch("localhost:8000/api/reconstruct", 
+       * body { shares })
+      */
       const results = calculateResults();
       votingState.currentStep = 5;
       
