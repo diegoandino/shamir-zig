@@ -6,17 +6,17 @@ const stdout = std.io.getStdOut().writer();
 
 pub fn main() !void {
     const allocator = std.heap.c_allocator;
-    
+
     var secret = try Managed.initSet(allocator, 189_389);
     defer secret.deinit();
 
     var p = try findNextPrime(allocator, secret);
     defer p.deinit();
-    
+
     //const p = try Managed.initSet(allocator, 115792089237316195423570985008687907853269984665640564039457584007913129640233);
 
     try stdout.print("Prime: {any}\n", .{p});
-    
+
     var SSSS = ShamirsSecretSharingScheme.init(allocator, 7, 10, p);
     defer SSSS.deinit();
 
@@ -41,12 +41,12 @@ pub fn main() !void {
     try stdout.print("Original secret: {d}\n", .{secret});
 }
 
-const Share = struct {
+pub const Share = struct {
     x: usize,
     y: Managed,
 };
 
-const ShamirsSecretSharingScheme = struct {
+pub const ShamirsSecretSharingScheme = struct {
     allocator: std.mem.Allocator,
     threshold: usize,
     num_shares: usize,
@@ -309,10 +309,10 @@ pub fn findNextPrime(allocator: std.mem.Allocator, secret: Managed) !Managed {
     // Initialize the numbers we'll need
     var candidate = try secret.clone();
     errdefer candidate.deinit();
-    
+
     var one = try Managed.initSet(allocator, 1);
     defer one.deinit();
-    
+
     var two = try Managed.initSet(allocator, 2);
     defer two.deinit();
 
@@ -359,14 +359,14 @@ fn isProbablyPrime(allocator: std.mem.Allocator, n: Managed) !bool {
     while (i < trial_limit) : (i += 2) {
         var divisor = try Managed.initSet(allocator, i);
         defer divisor.deinit();
-        
+
         var quotient = try Managed.init(allocator);
         defer quotient.deinit();
         var remainder = try Managed.init(allocator);
         defer remainder.deinit();
-        
+
         try Managed.divFloor(&quotient, &remainder, &n, &divisor);
-        
+
         if (remainder.eql(zero)) {
             return false;
         }

@@ -1,20 +1,21 @@
 const std = @import("std");
+const Managed = std.math.big.int.Managed;
 const json = std.json;
 const httpz = @import("httpz");
+const scheme = @import("scheme");
 
 const InitRequest = struct {
     secret: u64,
     threshold: u8,
-    total_members: u8,
+    total_shares: u8,
 };
 
 const SharesRequest = struct {
-    threshold: u8,
+    count: u8,
 };
 
 const ReconstructRequest = struct {
-    shares: []const []const u8,
-    threshold: u8,
+    shares: []const []const u64,
 };
 
 const ErrorResponse = struct {
@@ -22,29 +23,38 @@ const ErrorResponse = struct {
     message: []const u8,
 };
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-    defer _ = gpa.deinit();
+const State = struct {
+    SSSS: scheme.ShamirsSecretSharingScheme,
+    shares: []scheme.Share,
+    share_index: u8,
+};
 
-    var server = try httpz.Server(void).init(allocator, .{.port = 5882}, {});
+var state: ?State = null;
+
+// shared allocator
+var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+const allocator = arena.allocator();
+
+pub fn main() !void {
+    var server = try httpz.Server(void).init(allocator, .{ .port = 5882 }, {});
     defer {
         server.stop();
         server.deinit();
     }
 
-    // Configure CORS
     var router = server.router(.{});
-    // router.setCorsAllowOrigin("*");
-    // router.setCorsAllowHeaders("Content-Type");
-    // router.setCorsAllowMethods("POST, OPTIONS");
 
     // Register routes
     router.post("/api/init", handleInit, .{});
     router.post("/api/shares", handleShares, .{});
     router.post("/api/reconstruct", handleReconstruct, .{});
 
+    const stdout = std.io.getStdOut().writer();
+    try stdout.print("Running server\n", .{});
+
     try server.listen();
+
+    arena.deinit();
 }
 
 fn handleError(err: httpz.Server().Error) void {
@@ -52,8 +62,6 @@ fn handleError(err: httpz.Server().Error) void {
 }
 
 fn handleInit(req: *httpz.Request, res: *httpz.Response) !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
 
     // Read and parse request body
     if (req.body()) |body| {
@@ -68,8 +76,12 @@ fn handleInit(req: *httpz.Request, res: *httpz.Response) !void {
                 return sendError(res, "Threshold must be at least 2");
             }
 
+            var secret = try Managed.initSet(allocator, parsed.secret);
+            defer secret.deinit();
+            var SSSS = scheme.ShamirsSecretSharingScheme.init(allocator, parsed.threshold, parsed.total_shares, try scheme.findNextPrime(allocator, secret));
+            state = State{ .SSSS = SSSS, .shares = try SSSS.compute_shares(secret), .share_index = 0 };
+
             try sendJson(res, .{
-                .success = true,
                 .message = "Initialized successfully",
             });
         }
@@ -77,41 +89,75 @@ fn handleInit(req: *httpz.Request, res: *httpz.Response) !void {
 }
 
 fn handleShares(req: *httpz.Request, res: *httpz.Response) !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    if (state == null) {
+        return sendError(res, "Not yet initialized");
+    }
+
     if (req.body()) |body| {
-        var parsed = try std.json.parseFromSlice(SharesRequest, allocator, body, .{});
-        defer parsed.deinit();
+        const stdout = std.io.getStdOut().writer();
+        try stdout.print("Shares request body: {s}\n", .{body});
 
-        if (parsed.value.threshold > parsed.value.total_shares) {
-            return sendError(res, "Threshold cannot be greater than total shares");
+        if (try req.json(SharesRequest)) |parsed| {
+            if (state.?.share_index + parsed.count > state.?.shares.len) {
+                return sendError(res, "Not enough shares to give");
+            }
+
+            const u64Share = struct {
+                x: usize,
+                y: u64,
+            };
+
+            const shares = try allocator.alloc(u64Share, parsed.count);
+            defer allocator.free(shares);
+
+            var i: u8 = 0;
+            while (i < parsed.count) : (i += 1) {
+                const new_y = try state.?.shares[state.?.share_index + i].y.to(u64);
+                shares[i] = u64Share{
+                    .x = state.?.shares[state.?.share_index + i].x,
+                    .y = new_y,
+                };
+            }
+            state.?.share_index = state.?.share_index + i;
+
+            try sendJson(res, .{
+                .shares = shares,
+            });
         }
-
-        try sendJson(res, .{
-            .success = true,
-            .shares = "Generated shares will go here",
-        });
     }
 }
 
 fn handleReconstruct(req: *httpz.Request, res: *httpz.Response) !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    if (state == null) {
+        return sendError(res, "Not yet initialized");
+    }
 
     if (req.body()) |body| {
-        var parsed = try std.json.parseFromSlice(ReconstructRequest, allocator, body, .{});
-        defer parsed.deinit();
+        const stdout = std.io.getStdOut().writer();
+        try stdout.print("Reconstruct request body: {s}\n", .{body});
 
-        if (parsed.value.shares.len < parsed.value.threshold) {
-            return sendError(res, "Insufficient shares provided");
+        if (try req.json(ReconstructRequest)) |parsed| {
+            var shares = try allocator.alloc(scheme.Share, parsed.shares.len);
+            defer allocator.free(shares);
+
+            var i: usize = 0;
+            for (parsed.shares) |share| {
+                shares[i] = scheme.Share{
+                    .x = share[0],
+                    .y = try Managed.initSet(allocator, share[1]),
+                };
+                i += 1;
+            }
+
+            const secret = state.?.SSSS.reconstruct_secret(shares) catch {
+                return sendError(res, "Reconstruction failed, not enough shares");
+            };
+            defer secret.deinit();
+
+            try sendJson(res, .{
+                .secret = try secret.to(u64),
+            });
         }
-
-        try sendJson(res, .{
-            .success = true,
-            .secret = 0, // Replace with actual reconstructed secret
-        });
     }
 }
 
@@ -124,6 +170,5 @@ fn sendError(res: *httpz.Response, message: []const u8) !void {
 
 fn sendJson(res: *httpz.Response, value: anytype) !void {
     res.status = 200;
-    //try res.headers.put("Content-Type", "application/json");
     try res.json(value, .{});
 }
