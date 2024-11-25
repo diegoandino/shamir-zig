@@ -14,8 +14,13 @@ const SharesRequest = struct {
     count: u8,
 };
 
+const u64Share = struct {
+    x: usize,
+    y: u64,
+};
+
 const ReconstructRequest = struct {
-    shares: []const []const u64,
+    shares: []const u64Share,
 };
 
 const ErrorResponse = struct {
@@ -102,11 +107,6 @@ fn handleShares(req: *httpz.Request, res: *httpz.Response) !void {
                 return sendError(res, "Not enough shares to give");
             }
 
-            const u64Share = struct {
-                x: usize,
-                y: u64,
-            };
-
             const shares = try allocator.alloc(u64Share, parsed.count);
             defer allocator.free(shares);
 
@@ -143,8 +143,8 @@ fn handleReconstruct(req: *httpz.Request, res: *httpz.Response) !void {
             var i: usize = 0;
             for (parsed.shares) |share| {
                 shares[i] = scheme.Share{
-                    .x = share[0],
-                    .y = try Managed.initSet(allocator, share[1]),
+                    .x = share.x,
+                    .y = try Managed.initSet(allocator, share.y),
                 };
                 i += 1;
             }
