@@ -18,7 +18,7 @@ type Step = 1 | 2 | 3 | 4 | 5;
 
 interface Share {
   id: number;
-  share: string;
+  share: { x: number, y: number  };
 }
 
 interface ValidationError {
@@ -47,6 +47,7 @@ interface ClientState {
   votes: Record<string, boolean>;
   shares: Share[];
   currentMemberId: string | null;
+  myShare?: { x: number, y: number };
 }
 
 const Client: React.FC = () => {
@@ -59,7 +60,8 @@ const Client: React.FC = () => {
     members: [],
     votes: {},
     shares: [],
-    currentMemberId: null
+    currentMemberId: null,
+    myShare: undefined
   });
 
   const [errors, setErrors] = useState<ValidationError[]>([]);
@@ -152,12 +154,21 @@ const Client: React.FC = () => {
       setState(current => ({
         ...current,
         ...newState,
-        currentMemberId: current.currentMemberId
+        currentMemberId: current.currentMemberId,
+        votes: newState.votes
       }));
     });
 
     newSocket.on('votingComplete', (results) => {
       setResult(results);
+    });
+
+    newSocket.on('shareReceived', (shareData) => {
+      // Store only this client's share
+      setState(current => ({
+        ...current,
+        myShare: shareData.share
+      }));
     });
 
     setSocket(newSocket);
@@ -167,13 +178,26 @@ const Client: React.FC = () => {
     };
   }, []);
 
-
   // Effect to show join dialog
   useEffect(() => {
     if (state.currentStep === 3 && !state.currentMemberId) {
       setShowJoinDialog(true);
     }
   }, [state.currentStep, state.currentMemberId]);
+
+  /* useEffect(() => {
+    socket?.on('shareReceived', (shareData) => {
+      // Store only this client's share
+      setState(current => ({
+        ...current,
+        myShare: shareData.share
+      }));
+    });
+
+    return () => {
+      socket?.off('shareReceived');
+    };
+  }, [socket]); */
 
   const handleSetup = async (e: React.FormEvent<HTMLFormElement>): Promise<void> => {
     e.preventDefault();
@@ -339,7 +363,8 @@ const Client: React.FC = () => {
       members: [],
       votes: {},
       shares: [],
-      currentMemberId: null
+      currentMemberId: null,
+      myShare: undefined
     });
     setShowJoinDialog(false);
     setMemberName('');
@@ -520,7 +545,6 @@ const Client: React.FC = () => {
                           </Badge>
                         )}
                       </div>
-                      
                       {member.id === state.currentMemberId && !state.votes[member.id] && (
                         <div className="flex gap-2">
                           <Button
@@ -587,18 +611,19 @@ const Client: React.FC = () => {
       <div className="space-y-6">
         <Alert>
           <AlertDescription>
-            Voting complete! Each member receives their share:
+            Voting complete!
           </AlertDescription>
         </Alert>
         <ScrollArea className="h-[400px] rounded-md border p-4">
-          {state.shares.map((share) => (
-            <div key={share.id} className="mb-4 p-4 border rounded">
-              <Label>Board Member {share.id}</Label>
-              <div className="mt-2 p-2 bg-muted rounded">
-                <code className="text-sm">{share.share}</code>
+          {state.myShare && (
+            <div className="mb-4 p-4 border rounded">
+              <Label>Your Share</Label>
+              <div className="mt-2 p-2 bg-muted rounded flex flex-col gap-1">
+                <code className="text-sm">x: {state.myShare.x}</code>
+                <code className="text-sm">y: {state.myShare.y}</code>
               </div>
             </div>
-          ))}
+          )}
         </ScrollArea>
         <Button onClick={() => setState(current => ({ ...current, currentStep: 5 }))}>
           Proceed to Result Recovery

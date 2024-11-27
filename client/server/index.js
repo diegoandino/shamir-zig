@@ -14,7 +14,6 @@ const io = new Server(httpServer, {
   pingInterval: 25000
 });
 
-// Global state
 let votingState = {
   currentStep: 1,
   resolution: '',
@@ -25,20 +24,23 @@ let votingState = {
   shares: []
 };
 
+let shareState = {
+  shares: [[]] 
+}
+
 // Helper function to broadcast state
 function broadcastState() {
   io.emit('stateUpdate', votingState);
 }
 
-// Helper function to generate shares (mock implementation)
-function generateShares(totalMembers) {
-  return Array.from(
-    { length: totalMembers },
-    (_, i) => ({
-      id: i + 1,
-      share: `Share-${i + 1}-${Math.random().toString(36).substring(7)}`
-    })
-  );
+// Helper function to broadcast shares to specific clients
+function broadcastShares(shares) {
+  shares.forEach((share) => {
+    io.to(share.id).emit('shareReceived', {
+      id: share.id,
+      share: share.share
+    });
+  });
 }
 
 // Helper function to calculate voting results
@@ -160,29 +162,42 @@ io.on('connection', (socket) => {
 
       votingState.votes[socket.id] = vote;
       member.hasVoted = true;
+      broadcastState();
 
       // Check if vote count has reached threshold
       if (Object.keys(votingState.votes).length === votingState.threshold) {
         votingState.currentStep = 4;
-        const initRes = await fetch('http://localhost:5882/api/init', {
+        await fetch('http://localhost:5882/api/init', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            secret: votingState.votes,
+            secret: Object.keys(votingState.votes).length,
             threshold: votingState.threshold,
-            total_members: votingState.totalMembers
+            total_shares: votingState.totalMembers
           })
         });
-        console.log("init res:", initRes)
 
         // get shares from Zig API
-        votingState.shares = generateShares(votingState.totalMembers);
-        
-        //const results = calculateResults();
-        //io.emit('votingComplete', results);
+        const sharesRes = await fetch('http://localhost:5882/api/shares', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            count: votingState.members.length,
+          })
+        }).then(s => s.json());
+
+        const shares = sharesRes.shares.map((share, index) => ({
+          id: votingState.members[index].id,
+          share: share
+        }));
+
+        votingState.shares = shares;
+        broadcastShares(shares)
+        broadcastState();
+        console.log("shares res:", shares)
       }
 
-      broadcastState();
+      //broadcastState();
       callback?.({ success: true });
     } catch (error) {
       console.error('Vote error:', error);
