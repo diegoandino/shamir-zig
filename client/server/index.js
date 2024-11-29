@@ -44,12 +44,12 @@ function broadcastShares(shares) {
 }
 
 // Helper function to calculate voting results
-function calculateResults() {
+function calculateResults(secret) {
   const votes = Object.values(votingState.votes);
   return {
     approved: votes.filter(v => v).length,
     rejected: votes.filter(v => !v).length,
-    totalVotes: votes.length
+    totalVotes: secret 
   };
 }
 
@@ -206,7 +206,7 @@ io.on('connection', (socket) => {
   });
 
   // Reveal result
-  socket.on('revealResult', ({ shares }, callback) => {
+  socket.on('revealResult', async ({ shares }, callback) => {
     try {
       if (!Array.isArray(shares)) {
         callback?.({ success: false, error: 'Invalid shares format' });
@@ -218,20 +218,27 @@ io.on('connection', (socket) => {
         return;
       }
       
-      /* 
-       * get reconstructed secret from Zig SSSS API
-       * fetch("localhost:5882/api/reconstruct", 
-       * body { shares })
-      */
+      //get reconstructed secret from Zig SSSS API
+      const body = JSON.stringify({
+        shares: shares
+      })
+      console.log("shares body: ", body)
 
-      fetch('http://localhost:4000/api/shares', {
+      const res = await fetch('http://localhost:5882/api/reconstruct', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          secret: votingState.threshold,
-        })
-      });
-      const results = calculateResults();
+        body: body 
+      }).then(x => x.json())
+      console.log("server reconstruct response: ", res)
+      console.log("votes object: ", Object.values(votingState.votes));
+      console.log("votes: ", votingState.votes);
+      
+      if (res.secret === 0 || res.success === false) {
+        callback?.({ success: false, error: 'Invalid shares' });
+        return;
+      }
+
+      const results = calculateResults(res.secret);
       votingState.currentStep = 5;
       
       broadcastState();

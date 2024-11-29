@@ -21,6 +21,11 @@ interface Share {
   share: { x: number, y: number  };
 }
 
+interface SharePoint {
+  x: number;
+  y: number;
+}
+
 interface ValidationError {
   field: string;
   message: string;
@@ -319,11 +324,38 @@ const Client: React.FC = () => {
       return;
     }
 
+    const formattedShares = validShares.map(share => {
+      try {
+        // Remove extra spaces and normalize the format
+        const cleanShare = share
+          .trim()          
+          .replace(/\s+/g, ' ')          
+          .replace(/:\s*/g, ': ')
+          .toLowerCase();
+
+        // Use regex to extract x and y values
+        const xMatch = cleanShare.match(/x:\s*(-?\d+)/);
+        const yMatch = cleanShare.match(/y:\s*(-?\d+)/);
+
+        if (!xMatch || !yMatch) {
+          throw new Error(`Invalid share format: ${share}`);
+        }
+
+        return {
+          x: parseInt(xMatch[1], 10),
+          y: parseInt(yMatch[1], 10)
+        };
+      } catch (error) {
+        setRevealError(`Invalid share format: ${share}`);
+        throw error;
+      }
+    });
+
     setIsRevealing(true);
     setSharesEntered(true);
     
     try {
-      socket?.emit('revealResult', { shares: validShares }, (response: { success: boolean, error?: string, result?: VoteResult }) => {
+      socket?.emit('revealResult', { shares: formattedShares }, (response: { success: boolean, error?: string, result?: VoteResult }) => {
         if (response.success && response.result) {
           setResult(response.result);
           toast({
