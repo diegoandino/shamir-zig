@@ -32,9 +32,8 @@ interface ValidationError {
 }
 
 interface VoteResult {
-  approved: number;
-  rejected: number;
-  totalVotes: number;
+  approved: boolean;
+  reconstructedSecret: number;
 }
 
 interface Member {
@@ -669,7 +668,7 @@ const Client: React.FC = () => {
       <div className="space-y-6">
         <Alert>
           <AlertDescription>
-            Enter {state.threshold} or more shares to reveal the result
+            Enter shares to reveal the result
           </AlertDescription>
         </Alert>
         
@@ -708,40 +707,28 @@ const Client: React.FC = () => {
             </Button>
           </>
         ) : (
-          <Card>
-            <CardHeader>
-              <CardTitle>Resolution Result</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="text-lg font-medium">
-                Resolution: {state.resolution}
-              </div>
-              <div className="space-y-2">
-                <div className="flex justify-between items-center">
-                  <span>Approved:</span>
-                  <span className="font-bold text-green-500">
-                    {result?.approved!} votes ({((result?.approved! / result?.totalVotes!) * 100).toFixed(1)}%)
-                  </span>
+            <Card>
+              <CardHeader>
+                <CardTitle>Resolution Result</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="text-lg font-medium">
+                  Resolution: {state.resolution}
                 </div>
-                <Progress value={(result?.approved! / result?.totalVotes!) * 100} className="bg-red-200">
-                  <div className="bg-green-500 h-full transition-all" />
-                </Progress>
-                <div className="flex justify-between items-center">
-                  <span>Rejected:</span>
-                  <span className="font-bold text-red-500">
-                    {result?.rejected!} votes ({((result?.rejected! / result?.totalVotes!) * 100).toFixed(1)}%)
-                  </span>
-                </div>
-              </div>
-              <Alert className={result?.approved! > result?.rejected! ? 'bg-green-100' : 'bg-red-100'}>
-                <AlertTitle>Final Outcome</AlertTitle>
-                <AlertDescription>
-                  The resolution has been {result?.approved! > result?.rejected! ? 'APPROVED' : 'REJECTED'} by the board.
-                </AlertDescription>
-              </Alert>
-            </CardContent>
-          </Card>
-        )}
+                <Alert className={result?.approved ? 'bg-green-100' : 'bg-red-100'}>
+                  <AlertTitle>Final Outcome</AlertTitle>
+                  <AlertDescription className="flex items-center justify-between">
+                    <span>
+                      {result?.approved ? 'APPROVED!' : 'DENIED'} with {result?.reconstructedSecret} votes
+                    </span>
+                    <span className={`font-bold ${result?.approved ? 'text-green-500' : 'text-red-500'}`}>
+                      {result?.reconstructedSecret} votes
+                    </span>
+                  </AlertDescription>
+                </Alert>
+              </CardContent>
+            </Card>
+          )}
       </div>
     </TabsContent>
   );

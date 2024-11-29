@@ -44,12 +44,12 @@ function broadcastShares(shares) {
 }
 
 // Helper function to calculate voting results
-function calculateResults(secret) {
+function getResults() {
   const votes = Object.values(votingState.votes);
   return {
     approved: votes.filter(v => v).length,
     rejected: votes.filter(v => !v).length,
-    totalVotes: secret 
+    totalVotes: votes.length 
   };
 }
 
@@ -167,15 +167,29 @@ io.on('connection', (socket) => {
       // Check if vote count has reached threshold
       if (Object.keys(votingState.votes).length === votingState.threshold) {
         votingState.currentStep = 4;
-        await fetch('http://localhost:5882/api/init', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            secret: Object.keys(votingState.votes).length,
-            threshold: votingState.threshold,
-            total_shares: votingState.totalMembers
-          })
-        });
+        let results = getResults() 
+        if (results.approved > results.rejected) {
+          await fetch('http://localhost:5882/api/init', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              secret: results.approved,
+              threshold: votingState.threshold,
+              total_shares: votingState.totalMembers
+            })
+          });
+        } 
+        else {
+          await fetch('http://localhost:5882/api/init', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              secret: results.rejected,
+              threshold: votingState.threshold,
+              total_shares: votingState.totalMembers
+            })
+          });
+        }
 
         // get shares from Zig API
         const sharesRes = await fetch('http://localhost:5882/api/shares', {
@@ -238,7 +252,12 @@ io.on('connection', (socket) => {
         return;
       }
 
-      const results = calculateResults(res.secret);
+      const results = res.secret === getResults().approved 
+        ?
+        { reconstructedSecret: res.secret, approved: true }
+        : 
+        { reconstructedSecret: res.secret, approved: false }
+
       votingState.currentStep = 5;
       
       broadcastState();
