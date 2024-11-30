@@ -16,7 +16,7 @@ const SharesRequest = struct {
 
 const u64Share = struct {
     x: usize,
-    y: [] u8,
+    y: []const u8,
 };
 
 const ReconstructRequest = struct {
@@ -91,6 +91,7 @@ fn handleInit(req: *httpz.Request, res: *httpz.Response) !void {
                 try scheme.findNextPrime(allocator, secret)
             );
 
+            try stdout.print("Parsed secret: {any}\n", .{secret});
             state = State{
                 .SSSS = SSSS,
                 .shares = try SSSS.compute_shares(secret),
@@ -156,8 +157,6 @@ fn handleReconstruct(req: *httpz.Request, res: *httpz.Response) !void {
             var i: usize = 0;
             for (parsed.shares) |share| {
                 var new_y = try Managed.init(allocator);
-                defer new_y.deinit();
-                
                 try new_y.setString(10, share.y);
 
                 shares[i] = scheme.Share{
@@ -172,6 +171,7 @@ fn handleReconstruct(req: *httpz.Request, res: *httpz.Response) !void {
             };
             defer secret.deinit();
 
+            try stdout.print("Secret before: {any}\n", .{secret});
             try sendJson(res, .{
                 .secret = try secret.toString(allocator, 10, .lower),
             });
