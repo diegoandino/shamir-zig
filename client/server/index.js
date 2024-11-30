@@ -21,12 +21,9 @@ let votingState = {
   threshold: 0,
   members: [],
   votes: {},
-  shares: []
+  shares: [],
+  shareIndex: 0
 };
-
-let shareState = {
-  shares: [[]] 
-}
 
 // Helper function to broadcast state
 function broadcastState() {
@@ -91,7 +88,7 @@ io.on('connection', (socket) => {
   });
 
   // Set resolution
-  socket.on('setResolution', ({ resolution }, callback) => {
+  socket.on('setResolution', async ({ resolution }, callback) => {
     try {
       if (!resolution.trim()) {
         callback?.({ success: false, error: 'Resolution cannot be empty' });
@@ -103,6 +100,16 @@ io.on('connection', (socket) => {
         currentStep: 3,
         resolution
       };
+
+      await fetch('http://localhost:5882/api/init', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          secret: votingState.resolution,
+          threshold: votingState.threshold,
+          total_shares: votingState.totalMembers
+        })
+      });
       
       broadcastState();
       callback?.({ success: true });
@@ -113,32 +120,102 @@ io.on('connection', (socket) => {
   });
 
   // Join voting
-  socket.on('joinVoting', ({ name }, callback) => {
+  socket.on('joinVoting', async ({ name }, callback) => {
     try {
+      // Input validation
       if (!name.trim()) {
-        callback?.({ success: false, error: 'Name cannot be empty' });
+        const err = 'Name cannot be empty';
+        console.log(err);
+        callback?.({ success: false, error: err });
         return;
       }
 
+      // Check member limits and duplicates
       if (votingState.members.length >= votingState.totalMembers) {
-        callback?.({ success: false, error: 'Maximum number of members reached' });
+        const err = 'Maximum number of members reached';
+        console.log(err);
+        callback?.({ success: false, error: err });
         return;
       }
 
       if (votingState.members.some(m => m.id === socket.id)) {
-        callback?.({ success: false, error: 'Already joined the session' });
+        const err = 'Already joined the session';
+        console.log(err);
+        callback?.({ success: false, error: err });
         return;
       }
 
+      // Initialize the new member
       const newMember = {
         id: socket.id,
         name,
-        hasVoted: false
+        hasVoted: false,
+        apprpved: false,
+        share: null
       };
 
-      votingState.members.push(newMember);
-      broadcastState();
-      callback?.({ success: true, memberId: socket.id });
+      try {
+        // No shares exist yet - fetch new shares for all members
+        if (!votingState.shares || votingState.shares.length === 0) {
+          const sharesRes = await fetch('http://localhost:5882/api/shares', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              count: votingState.totalMembers             
+            })
+          });
+
+          if (!sharesRes.ok) {
+            throw new Error('Failed to fetch shares');
+          }
+
+          const sharesData = await sharesRes.json();
+          votingState.shares = sharesData.shares.map((share, index) => ({
+            id: index < votingState.members.length 
+              ? votingState.members[index].id 
+              : socket.id,
+            share: share
+          }));
+
+          // Assign share to new member
+          const memberShare = votingState.shares.find(s => s.id === socket.id);
+          if (!memberShare) {
+            throw new Error('Share assignment failed');
+          }
+          newMember.share = memberShare.share;
+          votingState.shareIndex += 1;
+        } 
+        // Shares exist but need to check availability
+        else {
+          if (votingState.shareIndex >= votingState.shares.length) {
+            const err = 'No more shares available';
+            console.log(err);
+            callback?.({ success: false, error: err });
+            return;
+          }
+          
+          // Assign next available share
+          newMember.share = votingState.shares[votingState.shareIndex].share;
+          votingState.shareIndex += 1;
+        }
+
+        // Add member and broadcast
+        votingState.members.push(newMember);
+        console.log("New member joined:", newMember);
+        broadcastState();
+        
+        callback?.({
+          success: true,
+          memberId: socket.id,
+          member: newMember
+        });
+
+      } catch (shareError) {
+        console.error('Share assignment error:', shareError);
+        callback?.({ success: false, error: 'Failed to assign shares' });
+        return;
+      }
+
     } catch (error) {
       console.error('Join error:', error);
       callback?.({ success: false, error: 'Failed to join session' });
@@ -161,57 +238,16 @@ io.on('connection', (socket) => {
       }
 
       votingState.votes[socket.id] = vote;
-      member.hasVoted = true;
+      member.hasVoted = vote;
       broadcastState();
 
       // Check if vote count has reached threshold
-      if (Object.keys(votingState.votes).length === votingState.threshold) {
+      const results = getResults()
+      if (results.approved === votingState.threshold) {
         votingState.currentStep = 4;
-        let results = getResults() 
-        if (results.approved > results.rejected) {
-          await fetch('http://localhost:5882/api/init', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              secret: results.approved,
-              threshold: votingState.threshold,
-              total_shares: votingState.totalMembers
-            })
-          });
-        } 
-        else {
-          await fetch('http://localhost:5882/api/init', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              secret: results.rejected,
-              threshold: votingState.threshold,
-              total_shares: votingState.totalMembers
-            })
-          });
-        }
-
-        // get shares from Zig API
-        const sharesRes = await fetch('http://localhost:5882/api/shares', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            count: votingState.members.length,
-          })
-        }).then(s => s.json());
-
-        const shares = sharesRes.shares.map((share, index) => ({
-          id: votingState.members[index].id,
-          share: share
-        }));
-
-        votingState.shares = shares;
-        broadcastShares(shares)
         broadcastState();
-        console.log("shares res:", shares)
       }
 
-      //broadcastState();
       callback?.({ success: true });
     } catch (error) {
       console.error('Vote error:', error);
@@ -223,45 +259,44 @@ io.on('connection', (socket) => {
   socket.on('revealResult', async ({ shares }, callback) => {
     try {
       if (!Array.isArray(shares)) {
-        callback?.({ success: false, error: 'Invalid shares format' });
+        const err = 'Invalid shares format'
+        console.error(err)
+        callback?.({ success: false, error: err });
         return;
       }
 
       if (shares.length < votingState.threshold) {
-        callback?.({ success: false, error: 'Insufficient shares provided' });
+        const err = 'Insufficient shares provided'
+        console.error(err)
+        callback?.({ success: false, error: err });
         return;
       }
       
-      //get reconstructed secret from Zig SSSS API
+      console.log("shares body (PRE JSON): ", shares)
       const body = JSON.stringify({
         shares: shares
       })
       console.log("shares body: ", body)
 
+      //get reconstructed secret from Zig SSSS API
       const res = await fetch('http://localhost:5882/api/reconstruct', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: body 
       }).then(x => x.json())
-      console.log("server reconstruct response: ", res)
-      console.log("votes object: ", Object.values(votingState.votes));
-      console.log("votes: ", votingState.votes);
       
+      console.log("reveal result: ", res.secret)
+
       if (res.secret === 0 || res.success === false) {
         callback?.({ success: false, error: 'Invalid shares' });
         return;
       }
 
-      const results = res.secret === getResults().approved 
-        ?
-        { reconstructedSecret: res.secret, approved: true }
-        : 
-        { reconstructedSecret: res.secret, approved: false }
-
-      votingState.currentStep = 5;
+      const result = res.secret
+      //votingState.currentStep = 5;
       
       broadcastState();
-      callback?.({ success: true, result: results });
+      callback?.({ success: true, result: result });
     } catch (error) {
       console.error('Reveal error:', error);
       callback?.({ success: false, error: 'Failed to reveal result' });
@@ -289,7 +324,8 @@ io.on('connection', (socket) => {
         threshold: 0,
         members: [],
         votes: {},
-        shares: []
+        shares: [],
+        shareIndex: 0
       };
       
       broadcastState();

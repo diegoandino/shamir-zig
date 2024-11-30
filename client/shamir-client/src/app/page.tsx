@@ -17,13 +17,9 @@ import { useToast } from "@/hooks/use-toast";
 type Step = 1 | 2 | 3 | 4 | 5;
 
 interface Share {
-  id: number;
-  share: { x: number, y: number  };
-}
-
-interface SharePoint {
-  x: number;
-  y: number;
+  x: number, 
+  y: string,
+  toString(): string
 }
 
 interface ValidationError {
@@ -33,13 +29,14 @@ interface ValidationError {
 
 interface VoteResult {
   approved: boolean;
-  reconstructedSecret: number;
+  reconstructedSecret: string;
 }
 
 interface Member {
   id: string;
   name: string;
   hasVoted: boolean;
+  share: Share
 }
 
 interface ClientState {
@@ -51,7 +48,8 @@ interface ClientState {
   votes: Record<string, boolean>;
   shares: Share[];
   currentMemberId: string | null;
-  myShare?: { x: number, y: number };
+  shareIndex: number;
+  submittedShares: Share[]
 }
 
 const Client: React.FC = () => {
@@ -65,13 +63,13 @@ const Client: React.FC = () => {
     votes: {},
     shares: [],
     currentMemberId: null,
-    myShare: undefined
+    shareIndex: 0,
+    submittedShares: []
   });
 
   const [errors, setErrors] = useState<ValidationError[]>([]);
   const [showJoinDialog, setShowJoinDialog] = useState<boolean>(false);
   const [memberName, setMemberName] = useState<string>('');
-  const [submittedShares, setSubmittedShares] = useState<string[]>([]);
   const [isRevealing, setIsRevealing] = useState<boolean>(false);
   const [result, setResult] = useState<VoteResult | null>(null);
   const [revealError, setRevealError] = useState<string>('');
@@ -79,6 +77,7 @@ const Client: React.FC = () => {
   const [reconnecting, setReconnecting] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [sharesEntered, setSharesEntered] = useState<boolean>(false);
+  const [phraseInputs, setPhraseInputs] = useState<string[]>([]);
 
   const { toast } = useToast();
 
@@ -159,7 +158,8 @@ const Client: React.FC = () => {
         ...current,
         ...newState,
         currentMemberId: current.currentMemberId,
-        votes: newState.votes
+        votes: newState.votes,
+        submittedShares: newState.submittedShares
       }));
     });
 
@@ -168,7 +168,6 @@ const Client: React.FC = () => {
     });
 
     newSocket.on('shareReceived', (shareData) => {
-      // Store only this client's share
       setState(current => ({
         ...current,
         myShare: shareData.share
@@ -182,6 +181,10 @@ const Client: React.FC = () => {
     };
   }, []);
 
+  useEffect(() => {
+    setPhraseInputs(new Array(state.totalMembers).fill(''));
+  }, [state.totalMembers]);
+
   // Effect to show join dialog
   useEffect(() => {
     if (state.currentStep === 3 && !state.currentMemberId) {
@@ -189,19 +192,50 @@ const Client: React.FC = () => {
     }
   }, [state.currentStep, state.currentMemberId]);
 
-  /* useEffect(() => {
-    socket?.on('shareReceived', (shareData) => {
-      // Store only this client's share
-      setState(current => ({
-        ...current,
-        myShare: shareData.share
-      }));
-    });
+  useEffect(() => {
+    if (state.currentStep === 4) {
+      handleRevealResult();
+    }
+  }, [state.currentStep]);
 
-    return () => {
-      socket?.off('shareReceived');
-    };
-  }, [socket]); */
+
+  function stringToBinary(input: string): string {
+    let result = 0n;
+    
+    // Store each character as a full 32-bit value to preserve exact Unicode values
+    for (let i = 0; i < input.length; i++) {
+        // Get the exact character code
+        const charCode = BigInt(input.charCodeAt(i));
+        
+        // Shift existing bits left by 32 and add new character
+        // Using 32 bits per character ensures we capture the full Unicode range
+        result = (result << 32n) | charCode;
+    }
+    
+    // Store the length at the end (32 bits)
+    result = (result << 32n) | BigInt(input.length);
+    
+    return result.toString();
+  }
+
+  function binaryToString(binaryStr: string): string {
+    // Parse the string parameter into a BigInt
+    const binary = BigInt(binaryStr);
+    
+    // Extract the length (last 32 bits)
+    const length = Number(binary & ((1n << 32n) - 1n));
+    let binaryValue = binary >> 32n;
+    
+    // Extract each character
+    const chars: string[] = new Array(length);
+    for (let i = length - 1; i >= 0; i--) {
+        const charCode = Number(binaryValue & ((1n << 32n) - 1n));
+        chars[i] = String.fromCharCode(charCode);
+        binaryValue = binaryValue >> 32n;
+    }
+    
+    return chars.join('');
+  }
 
   const handleSetup = async (e: React.FormEvent<HTMLFormElement>): Promise<void> => {
     e.preventDefault();
@@ -239,22 +273,76 @@ const Client: React.FC = () => {
       return;
     }
 
-    socket?.emit('setResolution', { resolution: state.resolution });
+    socket?.emit('setResolution', { resolution: stringToBinary(state.resolution) });
   };
 
   const handleJoinSession = async (): Promise<void> => {
     if (!memberName.trim()) return;
+    try {
+      const response = await new Promise<{ 
+        success: boolean; 
+        memberId?: string; 
+        member?: { 
+          id: string;
+          name: string;
+          hasVoted: boolean;
+          share: {
+            x: number;
+            y: string;
+          }
+        } 
+      }>((resolve) => {
+        socket?.emit('joinVoting', { name: memberName }, resolve);
+      });
 
-    socket?.emit('joinVoting', { name: memberName });
-    setState(current => ({
-      ...current,
-      currentMemberId: socket?.id || null
-    }));
-    setShowJoinDialog(false);
-    toast({
-      title: "Joined successfully",
-      description: "You've joined the voting session"
-    });
+      if (response.success && response.memberId && response.member) {
+        const currentMember = response.member;
+        const newMember: Member = {
+          id: response.memberId,
+          hasVoted: response.member.hasVoted,
+          name: response.member.name,
+          share: {
+            x: response.member.share.x,
+            y: response.member.share.y
+          }
+        };
+
+        setState(current => {
+          const memberExists = current.members.some(member => member.id === response.memberId);
+          
+          return {
+            ...current,
+            currentMemberId: response.memberId || null,
+            members: memberExists
+              ? current.members.map(member =>
+                  member.id === response.memberId
+                    ? { ...member, share: currentMember.share }
+                    : member
+                )
+              : [...current.members, newMember]
+          };
+        });
+
+        setShowJoinDialog(false);
+        toast({
+          title: "Joined successfully",
+          description: "You've joined the voting session"
+        });
+      } else {
+        toast({
+          variant: "default",
+          title: "Failed to join",
+          description: "Unknown error occurred"
+        });
+      }
+    } catch (error) {
+      console.error('Join session error:', error);
+      toast({
+        variant: "default",
+        title: "Error",
+        description: "Failed to join session"
+      });
+    }
   };
 
   const handleSocketEvent = async (
@@ -299,64 +387,77 @@ const Client: React.FC = () => {
   const handleVote = async (vote: boolean): Promise<void> => {
     if (!state.currentMemberId) return;
 
-    const success = await handleSocketEvent('submitVote', { vote }, 'Failed to submit vote');
+    const currentMember = state.members.find(m => m.id === state.currentMemberId);
+    if (!currentMember) return;
+
+    const success = await handleSocketEvent('submitVote', { 
+      vote,
+      share: vote ? currentMember.share : null,
+      memberId: state.currentMemberId
+    }, 'Failed to submit vote');
+
     if (success) {
       toast({
         title: "Vote submitted",
         description: "Your vote has been recorded"
-      });
+      });    
     }
-  };
-
-  const handleShareInput = (index: number, value: string): void => {
-    const newShares = [...submittedShares];
-    newShares[index] = value;
-    setSubmittedShares(newShares);
-    setRevealError('');
   };
 
   const handleRevealResult = async (): Promise<void> => {
-    const validShares = submittedShares.filter(share => share && share.trim());
-    
-    if (validShares.length < state.threshold) {
-      setRevealError(`Need at least ${state.threshold} shares to reveal the result. Currently have ${validShares.length}.`);
-      return;
-    }
+    const submittedShares = state.members.filter(m => m.hasVoted)
 
-    const formattedShares = validShares.map(share => {
+    /* if (state.submittedShares.length < state.threshold) {
+      setRevealError(`Need at least ${state.threshold} shares to reveal the result. Currently have ${state.submittedShares.length}.`);
+      return;
+    } */
+
+    const formattedShares = submittedShares.map(s => {
       try {
-        // Remove extra spaces and normalize the format
+        const share:Share = {
+          x: s.share.x,
+          y: s.share.y,
+          toString():string {
+            return `{ x: ${this.x}, y: ${this.y} }` 
+          }
+        }
+
         const cleanShare = share
+          .toString()
           .trim()          
           .replace(/\s+/g, ' ')          
           .replace(/:\s*/g, ': ')
           .toLowerCase();
 
+        console.log("clean share: ", cleanShare)
         // Use regex to extract x and y values
         const xMatch = cleanShare.match(/x:\s*(-?\d+)/);
         const yMatch = cleanShare.match(/y:\s*(-?\d+)/);
 
+        console.log("x: ", xMatch)
+        console.log("y: ", yMatch)
         if (!xMatch || !yMatch) {
           throw new Error(`Invalid share format: ${share}`);
         }
 
         return {
-          x: parseInt(xMatch[1], 10),
-          y: parseInt(yMatch[1], 10)
+          x: xMatch[1],
+          y: yMatch[1]
         };
       } catch (error) {
-        setRevealError(`Invalid share format: ${share}`);
+        //setRevealError(`Invalid share format: ${share}`);
         throw error;
       }
     });
-
-    setIsRevealing(true);
-    setSharesEntered(true);
     
     try {
-      socket?.emit('revealResult', { shares: formattedShares }, (response: { success: boolean, error?: string, result?: VoteResult }) => {
+      socket?.emit('revealResult', { shares: formattedShares }, (response: { success: boolean, error?: string, result?: string }) => {
         if (response.success && response.result) {
-          setResult(response.result);
+          const secret:string = binaryToString(response.result)
+          console.log("sec: ", secret)
+          const result:VoteResult = { approved: true, reconstructedSecret: secret }
+          console.log("result: ", result)
+          setResult(result);
           toast({
             title: "Result Revealed",
             description: "The voting result has been successfully revealed"
@@ -395,11 +496,11 @@ const Client: React.FC = () => {
       votes: {},
       shares: [],
       currentMemberId: null,
-      myShare: undefined
+      shareIndex: 0,
+      submittedShares: []
     });
     setShowJoinDialog(false);
     setMemberName('');
-    setSubmittedShares([]);
     setIsRevealing(false);
     setResult(null);
     setRevealError('');
@@ -430,6 +531,11 @@ const Client: React.FC = () => {
 
   const getErrorMessage = (field: string): string | undefined => {
     return errors.find(error => error.field === field)?.message;
+  };
+
+  const formatLongString = (str: string): string => {
+    if (str.length <= 10) return str;
+    return `${str.substring(0, 4)}...${str.substring(str.length - 3)}`;
   };
 
   const ConnectionStatusBanner = () => {
@@ -506,233 +612,249 @@ const Client: React.FC = () => {
     </TabsContent>
   );
 
-  const renderResolution = () => (
-    <TabsContent value="step2">
-      <form onSubmit={handleCreateResolution} className="space-y-6">
-        <div className="space-y-2">
-          <Label htmlFor="resolution">Resolution Text</Label>
-          <Input
-            id="resolution"
-            required
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) => 
-              setState(current => ({
-                ...current,
-                resolution: e.target.value
-              }))}
-            placeholder="Enter the resolution to be voted on..."
-            className={getErrorMessage('resolution') ? 'border-red-500' : ''}
-          />
-          {getErrorMessage('resolution') && (
-            <p className="text-sm text-red-500">{getErrorMessage('resolution')}</p>
-          )}
-        </div>
-        <Button type="submit">Create Resolution</Button>
-      </form>
-    </TabsContent>
-  );
+  const renderResolution = () => {
+    const handlePhraseInput = (index: number, value: string) => {
+      // Remove any spaces from the input value
+      const cleanValue = value.replace(/\s/g, '');
+      
+      const newPhrases = [...phraseInputs];
+      newPhrases[index] = cleanValue;
+      setPhraseInputs(newPhrases);
+
+      const validPhrases = newPhrases.filter(phrase => phrase !== '');
+      if (validPhrases.length >= state.threshold) {
+        const combinedPhrase = validPhrases.join('-');
+        
+        setState(current => ({
+          ...current,
+          resolution: combinedPhrase
+        }));
+      }
+    };
+
+    return (
+     <TabsContent value="step2">
+       <form onSubmit={handleCreateResolution} className="space-y-6">
+         <div className="space-y-4">
+           <div className="flex items-center justify-between">
+             <Label htmlFor="phrases">Enter Secret Phrases</Label>
+             <span className="text-sm text-muted-foreground">
+               Min required: {state.threshold} / Max: {state.totalMembers}
+             </span>
+           </div>
+           
+           <div className="grid grid-cols-3 gap-4">
+             {Array.from({ length: state.totalMembers }, (_, i) => (
+               <div 
+                 key={i} 
+                 className={`relative group ${
+                   i < state.threshold ? 'required' : ''
+                 }`}
+               >
+                 <div className="absolute -top-3 left-2 bg-background px-1">
+                   <span className="text-xs text-muted-foreground">
+                     {i + 1}
+                   </span>
+                 </div>
+                 <Input
+                   value={phraseInputs[i] || ''}
+                   onChange={(e) => handlePhraseInput(i, e.target.value)}
+                   className={`border-2 ${
+                     i < state.threshold 
+                       ? 'border-primary' 
+                       : 'border-muted'
+                   } bg-muted/50 focus:bg-background`}
+                   placeholder="Enter phrase"
+                 />
+                 {i < state.threshold && (
+                   <span className="absolute -top-3 right-2 text-xs text-red-500">
+                     *
+                   </span>
+                 )}
+               </div>
+             ))}
+           </div>
+
+           <div className="flex items-center justify-between">
+             <span className="text-sm text-muted-foreground">
+               {phraseInputs.filter(p => p.trim() !== '').length} of {state.threshold} required phrases entered
+             </span>
+             <Button 
+               type="submit"
+               disabled={phraseInputs.filter(p => p.trim() !== '').length < state.threshold}
+             >
+               Submit Secret
+             </Button>
+           </div>
+
+           {getErrorMessage('resolution') && (
+             <Alert variant="destructive">
+               <AlertDescription>
+                 {getErrorMessage('resolution')}
+               </AlertDescription>
+             </Alert>
+           )}
+         </div>
+       </form>
+     </TabsContent>
+    );
+  };
 
   const renderVotingRoom = () => {
     const hasUserJoined = state.members.some(m => m.id === state.currentMemberId);
     const hasUserVoted = state.currentMemberId ? Boolean(state.votes[state.currentMemberId]) : false;
-    const canProceedToShares = 
-    state.members.length === state.totalMembers && 
-    Object.keys(state.votes).length === state.totalMembers;
+    const currentMember = state.members.find(m => m.id === state.currentMemberId);
 
     return (
-    <TabsContent value="step3">
-      <div className="space-y-6">
-        <Alert>
-          <AlertDescription>
-            Resolution: {state.resolution}
-          </AlertDescription>
-        </Alert>
+      <TabsContent value="step3">
+        <div className="space-y-6">
+          <Alert>
+            <AlertDescription>
+              Voting to recover secret key
+            </AlertDescription>
+          </Alert>
 
-        <div className="space-y-4">
-          <div className="space-y-2">
-            <div className="flex justify-between text-sm text-muted-foreground">
-              <span>Members Joined: {state.members.length}/{state.totalMembers}</span>
-              <span>Votes Cast: {Object.keys(state.votes).length}/{state.totalMembers}</span>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <div className="flex justify-between text-sm text-muted-foreground">
+                <span>Members Joined: {state.members.length}/{state.totalMembers}</span>
+                <span>Votes Cast: {Object.keys(state.votes).length}/{state.totalMembers}</span>
+              </div>
+              <Progress 
+                value={(state.members.length / state.totalMembers) * 100} 
+                className="h-2"
+              />
             </div>
-            <Progress 
-              value={(state.members.length / state.totalMembers) * 100} 
-              className="h-2"
-            />
-          </div>
 
-          <ScrollArea className="h-[400px] rounded-md border p-4">
-            <div className="space-y-4">
-              {state.members.map((member) => (
-                <Card key={member.id}>
-                  <CardContent className="p-4">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium">
-                          {member.name}
-                          {member.id === state.currentMemberId && " (You)"}
-                        </span>
-                        {state.votes[member.id] !== undefined && (
-                          <Badge variant="default">
-                            Voted
-                          </Badge>
+            <ScrollArea className="h-[400px] rounded-md border p-4">
+              <div className="space-y-4">
+                {state.members.map((member) => (
+                  <Card key={member.id}>
+                    <CardContent className="p-4">
+                      <div className="flex flex-col gap-2">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium">
+                              {member.name}
+                              {member.id === state.currentMemberId && " (Me)"}
+                            </span>
+                            {state.votes[member.id] !== undefined && (
+                              <Badge variant={state.votes[member.id] ? "default" : "destructive"}>
+                                {state.votes[member.id] ? "Approved" : "Rejected"}
+                              </Badge>
+                            )}
+                          </div>
+                          
+                          {member.id === state.currentMemberId && !state.votes[member.id] && (
+                            <div className="flex gap-2">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleVote(true)}
+                              >
+                                Approve
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleVote(false)}
+                              >
+                                Reject
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+                        
+                        {/* Show share information */}
+                        {member.share && member.id === state.currentMemberId && (
+                          <div className="mt-2 p-2 bg-muted rounded text-sm font-mono">
+                            Share: (x: {member.share.x}, y: {formatLongString(member.share.y)})
+                          </div>
                         )}
                       </div>
-                      {member.id === state.currentMemberId && !state.votes[member.id] && (
-                        <div className="flex gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handleVote(true)}
-                          >
-                            Approve
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handleVote(false)}
-                          >
-                            Reject
-                          </Button>
-                        </div>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+                    </CardContent>
+                  </Card>
+                ))}
 
-              {Array.from({ length: state.totalMembers - state.members.length }, (_, index) => (
-                <Card key={`empty-${index}`}>
-                  <CardContent className="p-4">
-                    <div className="text-muted-foreground">
-                      Waiting for member to join...
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          </ScrollArea>
+                {Array.from({ length: state.totalMembers - state.members.length }, (_, index) => (
+                  <Card key={`empty-${index}`}>
+                    <CardContent className="p-4">
+                      <div className="text-muted-foreground">
+                        Waiting for member to join...
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            </ScrollArea>
 
-          {/* Status messages */}
-          {!hasUserJoined ? (
-            <Alert>
-              <AlertDescription>
-                Please enter your name to join the voting session
-              </AlertDescription>
-            </Alert>
-          ) : !hasUserVoted ? (
-            <Alert>
-              <AlertDescription>
-                Please cast your vote on the resolution
-              </AlertDescription>
-            </Alert>
-          ) : !canProceedToShares ? (
-            <Alert>
-              <AlertDescription>
-                Waiting for all members to join and vote...
-              </AlertDescription>
-            </Alert>
-          ) : null}
+            {/* Status messages */}
+            {!hasUserJoined ? (
+              <Alert>
+                <AlertDescription>
+                  Please enter your name to join the voting session
+                </AlertDescription>
+              </Alert>
+            ) : !hasUserVoted ? (
+              <Alert>
+                <AlertDescription>
+                  Please cast your vote. Your share will be used for reconstruction if you approve.
+                </AlertDescription>
+              </Alert>
+            ) : state.votes[state.currentMemberId!] ? (
+              <Alert>
+                <AlertDescription>
+                  Your share will be used in the final reconstruction.
+                </AlertDescription>
+              </Alert>
+            ) : (
+              <Alert variant="destructive">
+                <AlertDescription>
+                  You rejected the proposal. Your share will not be used in reconstruction.
+                </AlertDescription>
+              </Alert>
+            )}
+          </div>
         </div>
-      </div>
-    </TabsContent>
+      </TabsContent>
     );
   };
 
-  const renderShareDistribution = () => (
+  const renderResultRecovery = () => (
     <TabsContent value="step4">
       <div className="space-y-6">
-        <Alert>
-          <AlertDescription>
-            Voting complete!
-          </AlertDescription>
-        </Alert>
-        <ScrollArea className="h-[400px] rounded-md border p-4">
-          {state.myShare && (
-            <div className="mb-4 p-4 border rounded">
-              <Label>Your Share</Label>
-              <div className="mt-2 p-2 bg-muted rounded flex flex-col gap-1">
-                <code className="text-sm">x: {state.myShare.x}</code>
-                <code className="text-sm">y: {state.myShare.y}</code>
-              </div>
-            </div>
-          )}
-        </ScrollArea>
-        <Button onClick={() => setState(current => ({ ...current, currentStep: 5 }))}>
-          Proceed to Result Recovery
-        </Button>
-      </div>
-    </TabsContent>
-  );
-
-  const renderResultRecovery = () => (
-    <TabsContent value="step5">
-      <div className="space-y-6">
-        <Alert>
-          <AlertDescription>
-            Enter shares to reveal the result
-          </AlertDescription>
-        </Alert>
-        
-        {result === null && sharesEntered === false ? (
-          <>
-            <ScrollArea className="h-[400px] rounded-md border p-4">
-              {Array.from({ length: state.threshold }, (_, i) => (
-                <div key={i} className="mb-4">
-                  <Label>Share {i + 1}</Label>
-                  <Input 
-                    className="mt-2" 
-                    placeholder="Enter share value..." 
-                    onChange={(e) => handleShareInput(i, e.target.value)}
-                    value={submittedShares[i] || ''}
-                  />
-                </div>
-              ))}
-            </ScrollArea>
-
-            {revealError && (
-              <Alert variant="destructive">
-                <AlertDescription>{revealError}</AlertDescription>
+        <Card>
+          <CardHeader>
+            <CardTitle>Resolution Result</CardTitle>
+          </CardHeader>
+          {result && 
+            <CardContent className="space-y-4">
+            {result?.approved ? (
+              <Alert className="bg-green-100">
+                <AlertTitle>Vote Passed!</AlertTitle>
+                <AlertDescription>
+                  <div className="space-y-2">
+                    <p>The secret has been reconstructed:</p>
+                    <div className="p-4 bg-muted rounded-md font-mono">
+                      {result.reconstructedSecret}
+                    </div>
+                  </div>
+                </AlertDescription>
+              </Alert>
+            ) : (
+              <Alert className="bg-red-100" variant="destructive">
+                <AlertTitle>Vote Failed</AlertTitle>
+                <AlertDescription>
+                  <p>The vote was rejected by the board members.</p>
+                </AlertDescription>
               </Alert>
             )}
-
-            <Progress 
-              value={(submittedShares.filter(s => s && s.trim()).length / state.threshold) * 100} 
-              className="w-full"
-            />
-            
-            <Button 
-              onClick={handleRevealResult}
-              disabled={isRevealing}
-            >
-              {isRevealing ? 'Reconstructing Result...' : 'Reveal Result'}
-            </Button>
-          </>
-        ) : (
-            <Card>
-              <CardHeader>
-                <CardTitle>Resolution Result</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="text-lg font-medium">
-                  Resolution: {state.resolution}
-                </div>
-                <Alert className={result?.approved ? 'bg-green-100' : 'bg-red-100'}>
-                  <AlertTitle>Final Outcome</AlertTitle>
-                  <AlertDescription className="flex items-center justify-between">
-                    <span>
-                      {result?.approved ? 'APPROVED!' : 'DENIED'} with {result?.reconstructedSecret} votes
-                    </span>
-                    <span className={`font-bold ${result?.approved ? 'text-green-500' : 'text-red-500'}`}>
-                      {result?.reconstructedSecret} votes
-                    </span>
-                  </AlertDescription>
-                </Alert>
-              </CardContent>
-            </Card>
-          )}
+          </CardContent>
+          }
+        </Card>
       </div>
     </TabsContent>
   );
-
 
   return (
     <div className="min-h-screen bg-background p-8">
@@ -763,14 +885,11 @@ const Client: React.FC = () => {
               <TabsTrigger value="step1">Setup</TabsTrigger>
               <TabsTrigger value="step2">Resolution</TabsTrigger>
               <TabsTrigger value="step3">Voting</TabsTrigger>
-              <TabsTrigger value="step4">Shares</TabsTrigger>
-              <TabsTrigger value="step5">Recovery</TabsTrigger>
+              <TabsTrigger value="step4">Recovery</TabsTrigger>
             </TabsList>
-
             {renderSetup()}
             {renderResolution()}
             {renderVotingRoom()}
-            {renderShareDistribution()}
             {renderResultRecovery()}
           </Tabs>
         </CardContent>
