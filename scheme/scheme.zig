@@ -7,13 +7,13 @@ const stdout = std.io.getStdOut().writer();
 pub fn main() !void {
     const allocator = std.heap.c_allocator;
 
-    var secret = try Managed.initSet(allocator, 189_389);
+    var secret = try Managed.init(allocator);
     defer secret.deinit();
+
+    try secret.setString(10, "965362171271163594829743597482564660996437523167191222700987408470500128126609480027797509581266397721138520078334647253520455741370857905969136022897819664");
 
     var p = try findNextPrime(allocator, secret);
     defer p.deinit();
-
-    //const p = try Managed.initSet(allocator, 115792089237316195423570985008687907853269984665640564039457584007913129640233);
 
     try stdout.print("Prime: {any}\n", .{p});
 

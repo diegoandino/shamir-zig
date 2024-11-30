@@ -5,7 +5,7 @@ const httpz = @import("httpz");
 const scheme = @import("scheme");
 
 const InitRequest = struct {
-    secret: u64,
+    secret: []const u8,
     threshold: u8,
     total_shares: u8,
 };
@@ -16,7 +16,7 @@ const SharesRequest = struct {
 
 const u64Share = struct {
     x: usize,
-    y: u64,
+    y: [] u8,
 };
 
 const ReconstructRequest = struct {
@@ -67,24 +67,35 @@ fn handleError(err: httpz.Server().Error) void {
 }
 
 fn handleInit(req: *httpz.Request, res: *httpz.Response) !void {
-
-    // Read and parse request body
     if (req.body()) |body| {
         const stdout = std.io.getStdOut().writer();
         try stdout.print("Body: {s}\n", .{body});
+        
         if (try req.json(InitRequest)) |parsed| {
             if (parsed.threshold > parsed.total_shares) {
                 return sendError(res, "Threshold cannot be greater than total shares");
             }
-
             if (parsed.threshold < 2) {
                 return sendError(res, "Threshold must be at least 2");
             }
 
-            var secret = try Managed.initSet(allocator, parsed.secret);
+            var secret = try Managed.init(allocator);
             defer secret.deinit();
-            var SSSS = scheme.ShamirsSecretSharingScheme.init(allocator, parsed.threshold, parsed.total_shares, try scheme.findNextPrime(allocator, secret));
-            state = State{ .SSSS = SSSS, .shares = try SSSS.compute_shares(secret), .share_index = 0 };
+            
+            try secret.setString(10, parsed.secret);
+
+            var SSSS = scheme.ShamirsSecretSharingScheme.init(
+                allocator,
+                parsed.threshold,
+                parsed.total_shares,
+                try scheme.findNextPrime(allocator, secret)
+            );
+
+            state = State{
+                .SSSS = SSSS,
+                .shares = try SSSS.compute_shares(secret),
+                .share_index = 0
+            };
 
             try sendJson(res, .{
                 .message = "Initialized successfully",
@@ -109,10 +120,12 @@ fn handleShares(req: *httpz.Request, res: *httpz.Response) !void {
 
             const shares = try allocator.alloc(u64Share, parsed.count);
             defer allocator.free(shares);
-
+            
             var i: u8 = 0;
             while (i < parsed.count) : (i += 1) {
-                const new_y = try state.?.shares[state.?.share_index + i].y.to(u64);
+                //const new_y = try state.?.shares[state.?.share_index + i].y.to(u64);
+                const new_y = try state.?.shares[state.?.share_index + i].y.toString(allocator, 10, .lower);
+
                 shares[i] = u64Share{
                     .x = state.?.shares[state.?.share_index + i].x,
                     .y = new_y,
@@ -142,9 +155,14 @@ fn handleReconstruct(req: *httpz.Request, res: *httpz.Response) !void {
 
             var i: usize = 0;
             for (parsed.shares) |share| {
+                var new_y = try Managed.init(allocator);
+                defer new_y.deinit();
+                
+                try new_y.setString(10, share.y);
+
                 shares[i] = scheme.Share{
                     .x = share.x,
-                    .y = try Managed.initSet(allocator, share.y),
+                    .y = new_y,
                 };
                 i += 1;
             }
@@ -155,7 +173,7 @@ fn handleReconstruct(req: *httpz.Request, res: *httpz.Response) !void {
             defer secret.deinit();
 
             try sendJson(res, .{
-                .secret = try secret.to(u64),
+                .secret = try secret.toString(allocator, 10, .lower),
             });
         }
     }
