@@ -26,7 +26,7 @@ interface ValidationError {
   field: string;
   message: string;
 }
-
+50
 interface VoteResult {
   approved: boolean;
   reconstructedSecret: string;
@@ -80,6 +80,7 @@ const Client: React.FC = () => {
   const [phraseInputs, setPhraseInputs] = useState<string[]>([]);
 
   const { toast } = useToast();
+  const MAX_MEMBERS:number = 50;
 
   // Socket.IO setup
   useEffect(() => {
@@ -182,7 +183,8 @@ const Client: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    setPhraseInputs(new Array(state.totalMembers).fill(''));
+    if (state.totalMembers)
+      setPhraseInputs(new Array(state.totalMembers).fill(''));
   }, [state.totalMembers]);
 
   // Effect to show join dialog
@@ -240,6 +242,14 @@ const Client: React.FC = () => {
   const handleSetup = async (e: React.FormEvent<HTMLFormElement>): Promise<void> => {
     e.preventDefault();
     setErrors([]);
+    
+    if (state.totalMembers > MAX_MEMBERS) {
+      setErrors([{
+        field: 'totalMembers',
+        message: `Total members cannot exceed ${MAX_MEMBERS}`
+      }]);
+      return;
+    }
 
     if (state.threshold > state.totalMembers) {
       setErrors([{
@@ -575,12 +585,17 @@ const Client: React.FC = () => {
             id="totalMembers"
             type="number"
             min="3"
+            max="50"
             required
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) => 
-              setState(current => ({
-                ...current,
-                totalMembers: parseInt(e.target.value, 10)
-              }))}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+              const val = parseInt(e.target.value, 10)
+              if (isNaN(val) || val <= MAX_MEMBERS) {
+                setState(current => ({
+                  ...current,
+                  totalMembers: val                
+                }))}
+              }
+            }
             className={getErrorMessage('totalMembers') ? 'border-red-500' : ''}
           />
           {getErrorMessage('totalMembers') && (
@@ -638,9 +653,6 @@ const Client: React.FC = () => {
          <div className="space-y-4">
            <div className="flex items-center justify-between">
              <Label htmlFor="phrases">Enter Secret Phrases</Label>
-             <span className="text-sm text-muted-foreground">
-               Min required: {state.threshold} / Max: {state.totalMembers}
-             </span>
            </div>
            
            <div className="grid grid-cols-3 gap-4">
@@ -659,29 +671,20 @@ const Client: React.FC = () => {
                  <Input
                    value={phraseInputs[i] || ''}
                    onChange={(e) => handlePhraseInput(i, e.target.value)}
-                   className={`border-2 ${
-                     i < state.threshold 
-                       ? 'border-primary' 
-                       : 'border-muted'
-                   } bg-muted/50 focus:bg-background`}
+                   className={`border-2 border-primary bg-muted/50 focus:bg-background`}
                    placeholder="Enter phrase"
                  />
-                 {i < state.threshold && (
-                   <span className="absolute -top-3 right-2 text-xs text-red-500">
-                     *
-                   </span>
-                 )}
+                 <span className="absolute -top-3 right-2 text-xs text-red-500">
+                   *
+                 </span>
                </div>
              ))}
            </div>
 
            <div className="flex items-center justify-between">
-             <span className="text-sm text-muted-foreground">
-               {phraseInputs.filter(p => p.trim() !== '').length} of {state.threshold} required phrases entered
-             </span>
              <Button 
                type="submit"
-               disabled={phraseInputs.filter(p => p.trim() !== '').length < state.threshold}
+               disabled={phraseInputs.filter(p => p.trim() !== '').length < state.totalMembers}
              >
                Submit Secret
              </Button>
