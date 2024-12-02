@@ -516,7 +516,8 @@ const Client: React.FC = () => {
     setRevealError('');
     setErrors([]);
     setSharesEntered(false);   
-    
+    setPhraseInputs([]);
+
     toast({
       title: "Session reset",
       description: "The voting session has been reset"
