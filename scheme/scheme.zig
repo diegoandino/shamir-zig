@@ -12,8 +12,8 @@ pub fn main() !void {
 
     try secret.setString(10, "965362171271163594829743597482564660996437523167191222700987408470500128126609480027797509581266397721138520078334647253520455741370857905969136022897819664");
 
-    var p = try findNextPrime(allocator, secret);
-    defer p.deinit();
+    const p = try choosePrime(allocator, secret, 5);
+    // defer p.deinit();
 
     try stdout.print("Prime: {any}\n", .{p});
 
