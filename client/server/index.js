@@ -7,7 +7,7 @@ const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
-    origin: "http://localhost:3000",
+    origin: "https://andino.ngrok.dev",
     methods: ["GET", "POST"]
   },
   pingTimeout: 60000,
@@ -22,12 +22,17 @@ let votingState = {
   members: [],
   votes: {},
   shares: [],
-  shareIndex: 0
+  shareIndex: 0,
+  result: null
 };
 
 // Helper function to broadcast state
 function broadcastState() {
-  io.emit('stateUpdate', votingState);
+  const stateToSend = {
+    ...votingState,
+    result: votingState.result
+  };
+  io.emit('stateUpdate', stateToSend);
 }
 
 // Helper function to broadcast shares to specific clients
@@ -101,7 +106,7 @@ io.on('connection', (socket) => {
         resolution
       };
 
-      await fetch('http://localhost:5882/api/init', {
+      await fetch('https://zig-andino.ngrok.dev/api/init', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -157,7 +162,7 @@ io.on('connection', (socket) => {
       try {
         // No shares exist yet - fetch new shares for all members
         if (!votingState.shares || votingState.shares.length === 0) {
-          const sharesRes = await fetch('http://localhost:5882/api/shares', {
+          const sharesRes = await fetch('https://zig-andino.ngrok.dev/api/shares', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -251,7 +256,7 @@ io.on('connection', (socket) => {
       console.log("shares body: ", body)
 
       //get reconstructed secret from Zig SSSS API
-      const res = await fetch('http://localhost:5882/api/reconstruct', {
+      const res = await fetch('https://zig-andino.ngrok.dev/api/reconstruct', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: body 
