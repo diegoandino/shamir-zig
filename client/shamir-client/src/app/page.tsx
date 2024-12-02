@@ -49,7 +49,8 @@ interface ClientState {
   shares: Share[];
   currentMemberId: string | null;
   shareIndex: number;
-  submittedShares: Share[]
+  submittedShares: Share[];
+  reconstructionLeader: string | null;
 }
 
 const Client: React.FC = () => {
@@ -64,7 +65,8 @@ const Client: React.FC = () => {
     shares: [],
     currentMemberId: null,
     shareIndex: 0,
-    submittedShares: []
+    submittedShares: [],
+    reconstructionLeader: null
   });
 
   const [errors, setErrors] = useState<ValidationError[]>([]);
@@ -155,17 +157,34 @@ const Client: React.FC = () => {
 
     // State update handler
     newSocket.on('stateUpdate', (newState: ClientState) => {
-      setState(current => ({
-        ...current,
-        ...newState,
-        currentMemberId: current.currentMemberId,
-        votes: newState.votes,
-        submittedShares: newState.submittedShares
-      }));
+      setState(current => {
+        // Preserve client-specific data
+        const clientData = {
+          currentMemberId: current.currentMemberId
+        };
+
+        // Create new state with server data taking precedence
+        const updatedState = {
+          ...newState,
+          ...clientData, // Override with client-specific data
+          members: [...newState.members], // Create new array reference
+          votes: { ...newState.votes }, // Create new object reference
+          submittedShares: [...(newState.submittedShares || [])], // Handle possible undefined
+          reconstructionLeader: newState.reconstructionLeader
+        };
+
+        return updatedState;
+      });
     });
 
     newSocket.on('votingComplete', (results) => {
-      setResult(results);
+      if (results.result) {
+        const secret = binaryToString(results.result);
+        setResult({
+          approved: results.approved,
+          reconstructedSecret: secret
+        });
+      }    
     });
 
     newSocket.on('shareReceived', (shareData) => {
@@ -415,82 +434,102 @@ const Client: React.FC = () => {
   };
 
   const handleRevealResult = async (): Promise<void> => {
-    const submittedShares = state.members.filter(m => m.hasVoted)
-
-    /* if (state.submittedShares.length < state.threshold) {
-      setRevealError(`Need at least ${state.threshold} shares to reveal the result. Currently have ${state.submittedShares.length}.`);
+    if (state.reconstructionLeader !== state.currentMemberId)
       return;
-    } */
-
-    const formattedShares = submittedShares.map(s => {
-      try {
-        const share:Share = {
-          x: s.share.x,
-          y: s.share.y,
-          toString():string {
-            return `{ x: ${this.x}, y: ${this.y} }` 
-          }
-        }
-
-        const cleanShare = share
-          .toString()
-          .trim()          
-          .replace(/\s+/g, ' ')          
-          .replace(/:\s*/g, ': ')
-          .toLowerCase();
-
-        console.log("clean share: ", cleanShare)
-        // Use regex to extract x and y values
-        const xMatch = cleanShare.match(/x:\s*(-?\d+)/);
-        const yMatch = cleanShare.match(/y:\s*(-?\d+)/);
-
-        console.log("x: ", xMatch)
-        console.log("y: ", yMatch)
-        if (!xMatch || !yMatch) {
-          throw new Error(`Invalid share format: ${share}`);
-        }
-
-        return {
-          x: xMatch[1],
-          y: yMatch[1]
-        };
-      } catch (error) {
-        //setRevealError(`Invalid share format: ${share}`);
-        throw error;
-      }
-    });
     
+    if (isRevealing) 
+      return;
+
+    setIsRevealing(true);
+
     try {
-      socket?.emit('revealResult', { shares: formattedShares }, (response: { success: boolean, error?: string, result?: string }) => {
-        if (response.success && response.result) {
-          const secret:string = binaryToString(response.result)
-          console.log("sec: ", secret)
-          const result:VoteResult = { approved: true, reconstructedSecret: secret }
-          console.log("result: ", result)
-          setResult(result);
-          toast({
-            title: "Result Revealed",
-            description: "The voting result has been successfully revealed"
-          });
-        } else {
-          setRevealError(response.error || 'Failed to reveal result');
-          setSharesEntered(false); // Reset if failed
-          toast({
-            variant: "destructive",
-            title: "Error",
-            description: response.error || 'Failed to reveal result'
-          });
+      const submittedShares = state.members.filter(m => m.hasVoted);
+      
+      // Add validation
+      if (submittedShares.length < state.threshold) {
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: `Need at least ${state.threshold} shares. Have ${submittedShares.length}.`
+        });
+        return;
+      }
+
+      const formattedShares = submittedShares.map(s => {
+        try {
+          const share:Share = {
+            x: s.share.x,
+            y: s.share.y,
+            toString():string {
+              return `{ x: ${this.x}, y: ${this.y} }` 
+            }
+          }
+
+          const cleanShare = share
+            .toString()
+            .trim()          
+            .replace(/\s+/g, ' ')          
+            .replace(/:\s*/g, ': ')
+            .toLowerCase();
+
+          console.log("clean share: ", cleanShare)
+          // Use regex to extract x and y values
+          const xMatch = cleanShare.match(/x:\s*(-?\d+)/);
+          const yMatch = cleanShare.match(/y:\s*(-?\d+)/);
+
+          console.log("x: ", xMatch)
+          console.log("y: ", yMatch)
+          if (!xMatch || !yMatch) {
+            throw new Error(`Invalid share format: ${share}`);
+          }
+
+          return {
+            x: xMatch[1],
+            y: yMatch[1]
+          };
+        } catch (error) {
+          //setRevealError(`Invalid share format: ${share}`);
+          throw error;
         }
       });
-    } catch (error) {
-      setRevealError('Failed to reconstruct the result. Please verify your shares and try again.');
-      setSharesEntered(false); // Reset if failed
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: "Failed to reveal result"
-      });
-    } finally {
+      
+      try {
+        socket?.emit('revealResult', { shares: formattedShares }, (response: { success: boolean, error?: string, result?: string }) => {
+          if (response.success && response.result) {
+            const secret:string = binaryToString(response.result)
+            console.log("sec: ", secret)
+            const result:VoteResult = { approved: true, reconstructedSecret: secret }
+            console.log("result: ", result)
+            setResult(result);
+            toast({
+              title: "Result Revealed",
+              description: "The voting result has been successfully revealed"
+            });
+          } else {
+            setRevealError(response.error || 'Failed to reveal result');
+            setSharesEntered(false); // Reset if failed
+            toast({
+              variant: "destructive",
+              title: "Error",
+              description: response.error || 'Failed to reveal result'
+            });
+          }
+        });
+      } catch (error) {
+        setRevealError('Failed to reconstruct the result. Please verify your shares and try again.');
+        setSharesEntered(false); // Reset if failed
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: "Failed to reveal result"
+        });
+      } finally {
+        setIsRevealing(false);
+      }
+    } 
+    catch (error) {
+    } 
+    finally {
       setIsRevealing(false);
     }
   };
@@ -507,7 +546,8 @@ const Client: React.FC = () => {
       shares: [],
       currentMemberId: null,
       shareIndex: 0,
-      submittedShares: []
+      submittedShares: [],
+      reconstructionLeader: null
     });
     setShowJoinDialog(false);
     setMemberName('');
@@ -831,30 +871,38 @@ const Client: React.FC = () => {
           <CardHeader>
             <CardTitle>Resolution Result</CardTitle>
           </CardHeader>
-          {result && 
+          {!result ? (
+            <CardContent>
+              <Alert>
+                <AlertDescription>
+                  Waiting for result...
+                </AlertDescription>
+              </Alert>
+            </CardContent>
+          ) : (
             <CardContent className="space-y-4">
-            {result?.approved ? (
-              <Alert className="bg-green-100">
-                <AlertTitle>Vote Passed!</AlertTitle>
-                <AlertDescription>
-                  <div className="space-y-2">
-                    <p>The secret has been reconstructed:</p>
-                    <div className="p-4 bg-muted rounded-md font-mono">
-                      {result.reconstructedSecret}
+              {result.approved ? (
+                <Alert className="bg-green-100">
+                  <AlertTitle>Vote Passed!</AlertTitle>
+                  <AlertDescription>
+                    <div className="space-y-2">
+                      <p>The secret has been reconstructed:</p>
+                      <div className="p-4 bg-muted rounded-md font-mono">
+                        {result.reconstructedSecret}
+                      </div>
                     </div>
-                  </div>
-                </AlertDescription>
-              </Alert>
-            ) : (
-              <Alert className="bg-red-100" variant="destructive">
-                <AlertTitle>Vote Failed</AlertTitle>
-                <AlertDescription>
-                  <p>The vote was rejected by the board members.</p>
-                </AlertDescription>
-              </Alert>
-            )}
-          </CardContent>
-          }
+                  </AlertDescription>
+                </Alert>
+              ) : (
+                <Alert className="bg-red-100" variant="destructive">
+                  <AlertTitle>Vote Failed</AlertTitle>
+                  <AlertDescription>
+                    <p>The vote was rejected by the board members.</p>
+                  </AlertDescription>
+                </Alert>
+              )}
+            </CardContent>
+          )}
         </Card>
       </div>
     </TabsContent>

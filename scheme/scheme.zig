@@ -17,7 +17,7 @@ pub fn main() !void {
 
     try stdout.print("Prime: {any}\n", .{p});
 
-    var SSSS = ShamirsSecretSharingScheme.init(allocator, 7, 10, p);
+    var SSSS = ShamirsSecretSharingScheme.init(allocator, 10, 10, p);
     defer SSSS.deinit();
 
     const shares = try SSSS.compute_shares(secret);
@@ -66,7 +66,7 @@ pub const ShamirsSecretSharingScheme = struct {
     }
 
     pub fn compute_shares(self: ShamirsSecretSharingScheme, secret: Managed) ![]Share {
-        std.debug.assert(self.threshold < self.num_shares);
+        std.debug.assert(self.threshold <= self.num_shares);
 
         const polynomial = try self.sample_random_polynomial(secret);
         defer self.allocator.free(polynomial);

@@ -165,58 +165,25 @@ io.on('connection', (socket) => {
             })
           });
 
-          if (!sharesRes.ok) {
-            throw new Error('Failed to fetch shares');
-          }
-
           const sharesData = await sharesRes.json();
-          votingState.shares = sharesData.shares.map((share, index) => ({
-            id: index < votingState.members.length 
-              ? votingState.members[index].id 
-              : socket.id,
-            share: share
-          }));
-
-          // Assign share to new member
-          const memberShare = votingState.shares.find(s => s.id === socket.id);
-          if (!memberShare) {
-            throw new Error('Share assignment failed');
-          }
-          newMember.share = memberShare.share;
-          votingState.shareIndex += 1;
-        } 
-        // Shares exist but need to check availability
-        else {
-          if (votingState.shareIndex >= votingState.shares.length) {
-            const err = 'No more shares available';
-            console.log(err);
-            callback?.({ success: false, error: err });
-            return;
-          }
-          
-          // Assign next available share
-          newMember.share = votingState.shares[votingState.shareIndex].share;
-          votingState.shareIndex += 1;
+          // Assign shares atomically
+          votingState.shares = sharesData.shares;
+          newMember.share = votingState.shares[votingState.shareIndex];
+          votingState.shareIndex++;
+        } else {
+          newMember.share = votingState.shares[votingState.shareIndex];
+          votingState.shareIndex++;
         }
 
-        // Add member and broadcast
         votingState.members.push(newMember);
-        console.log("New member joined:", newMember);
         broadcastState();
-        
-        callback?.({
-          success: true,
-          memberId: socket.id,
-          member: newMember
-        });
-
-      } catch (shareError) {
-        console.error('Share assignment error:', shareError);
-        callback?.({ success: false, error: 'Failed to assign shares' });
-        return;
+        callback?.({ success: true, memberId: socket.id, member: newMember });
+      } 
+      finally {
+        votingState.isAssigningShares = false;
       }
-
-    } catch (error) {
+    } 
+    catch (error) {
       console.error('Join error:', error);
       callback?.({ success: false, error: 'Failed to join session' });
     }
@@ -224,34 +191,40 @@ io.on('connection', (socket) => {
 
   // Submit vote
   socket.on('submitVote', async ({ vote }, callback) => {
+    if (votingState.isProcessingVote) {
+      callback?.({ success: false, error: 'Another vote is being processed' });
+      return;
+    }
+    votingState.isProcessingVote = true;
+
     try {
       const member = votingState.members.find(m => m.id === socket.id);
-      
-      if (!member) {
-        callback?.({ success: false, error: 'Not a member of the session' });
+      if (!member || member.hasVoted) {
+        callback?.({ success: false, error: member ? 'Already voted' : 'Not a member' });
         return;
       }
 
-      if (member.hasVoted) {
-        callback?.({ success: false, error: 'Already voted' });
-        return;
+      // Update state atomically
+      const updatedState = {
+        ...votingState,
+        votes: { ...votingState.votes, [socket.id]: vote },
+        members: votingState.members.map(m => 
+          m.id === socket.id ? { ...m, hasVoted: true } : m
+        )
+      };
+
+      const approvedCount = Object.values(updatedState.votes).filter(v => v).length;
+      if (approvedCount === votingState.threshold) {
+        updatedState.currentStep = 4;
+        // Designate one client to handle reconstruction
+        updatedState.reconstructionLeader = socket.id;
       }
 
-      votingState.votes[socket.id] = vote;
-      member.hasVoted = vote;
+      votingState = updatedState;
       broadcastState();
-
-      // Check if vote count has reached threshold
-      const results = getResults()
-      if (results.approved === votingState.threshold) {
-        votingState.currentStep = 4;
-        broadcastState();
-      }
-
       callback?.({ success: true });
-    } catch (error) {
-      console.error('Vote error:', error);
-      callback?.({ success: false, error: 'Failed to submit vote' });
+    } finally {
+      votingState.isProcessingVote = false;
     }
   });
 
@@ -272,7 +245,6 @@ io.on('connection', (socket) => {
         return;
       }
       
-      console.log("shares body (PRE JSON): ", shares)
       const body = JSON.stringify({
         shares: shares
       })
@@ -293,6 +265,10 @@ io.on('connection', (socket) => {
       }
 
       const result = res.secret
+      io.emit('votingComplete', { 
+        approved: true, 
+        result: result 
+      });
       //votingState.currentStep = 5;
       
       broadcastState();
