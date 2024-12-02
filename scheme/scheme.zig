@@ -269,6 +269,44 @@ fn printPolynomial(poly: []Managed) !void {
     try stdout.print("\n", .{});
 }
 
+fn choosePrime(allocator: std.mem.Allocator, secret: Managed, bits: u5) !Managed {
+    var max = try Managed.init(allocator);
+    defer max.deinit();
+    const one: u32 = 1;
+    const shiftAmount: u32 = one << bits;
+    try Managed.mul(&max, &secret, &try Managed.initSet(allocator, shiftAmount));
+
+    while (true) {
+        var p = try sampleSecureBigIntInRange(allocator, secret, max);
+
+        if (try isProbablyPrime(allocator, p)) {
+            return p;
+        }
+        p.deinit();
+    }
+}
+
+fn sampleSecureBigIntInRange(allocator: std.mem.Allocator, start: Managed, end: Managed) !Managed {
+    std.debug.assert(Managed.order(end, start) == std.math.Order.gt);
+
+    var diff = try Managed.init(allocator);
+    defer diff.deinit();
+    try Managed.sub(&diff, &end, &start);
+
+    var result = try Managed.init(allocator);
+    var sampled = try Managed.init(allocator);
+    while (true) {
+        sampled.deinit();
+        sampled = try generateSecureRandomBigInt(allocator, diff.bitCountAbs());
+        try Managed.add(&result, &start, &sampled);
+        if (Managed.order(result, end) == std.math.Order.lt) {
+            sampled.deinit();
+            break;
+        }
+    }
+    return result;
+}
+
 /// Generates a cryptographically secure random BigInt of specified bit length
 fn generateSecureRandomBigInt(allocator: std.mem.Allocator, bits: usize) !std.math.big.int.Managed {
     var result = try std.math.big.int.Managed.init(allocator);
