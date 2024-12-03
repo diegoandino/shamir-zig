@@ -4,42 +4,271 @@ const Managed = std.math.big.int.Managed;
 const rand = std.crypto.random;
 const stdout = std.io.getStdOut().writer();
 
-pub fn main() !void {
-    const allocator = std.heap.c_allocator;
+fn mod(allocator: std.mem.Allocator, a: Managed, b: Managed) !Managed {
+    var q = try Managed.initSet(allocator, 0);
+    var r = try Managed.initSet(allocator, 0);
+    try Managed.divFloor(&q, &r, &a, &b);
 
-    var secret = try Managed.init(allocator);
-    defer secret.deinit();
+    std.debug.print("q: {any}, r: {any}, a: {any}, b: {any}\n", .{ q, r, a, b });
+    q.deinit();
 
-    try secret.setString(10, "965362171271163594829743597482564660996437523167191222700987408470500128126609480027797509581266397721138520078334647253520455741370857905969136022897819664");
+    var zero = try Managed.initSet(allocator, 0);
+    defer zero.deinit();
+    if (Managed.order(r, zero) == std.math.Order.lt) {
+        try Managed.add(&r, &r, &b);
+    }
+    return r;
+}
 
-    const p = try choosePrime(allocator, secret, 5);
-    // defer p.deinit();
+pub fn is_prime(n: Managed, k: u32, allocator: std.mem.Allocator) !bool {
+    // const bigint = std.bigint;
 
-    try stdout.print("Prime: {any}\n", .{p});
+    var zero = try Managed.initSet(allocator, 0);
+    var one = try Managed.initSet(allocator, 1);
+    var two = try Managed.initSet(allocator, 2);
+    defer zero.deinit();
+    defer one.deinit();
+    defer two.deinit();
 
-    var SSSS = ShamirsSecretSharingScheme.init(allocator, 10, 10, p);
-    defer SSSS.deinit();
+    // if (n <= Managed.initSet(allocator, 1)) return false;
+    if (Managed.order(n, one) != std.math.Order.gt) return false;
+    if (Managed.order(n, try Managed.initSet(allocator, 3)) != std.math.Order.gt) return true;
+    // if (n <= Managed.initSet(allocator, 3)) return true;
 
-    const shares = try SSSS.compute_shares(secret);
-    defer allocator.free(shares);
+    // defer two.deinit();
+    if (Managed.eql(try mod(allocator, n, two), zero)) return false;
 
-    try stdout.print("shares:\n", .{});
-    for (shares) |share| {
-        try stdout.print("({d}, {any})\n", .{ share.x, share.y });
+    // var d = try n.sub(&Managed.initSet(allocator, 1));
+    var d = try Managed.init(allocator);
+    defer d.deinit();
+    try Managed.sub(&d, &n, &one);
+
+    var r: u32 = 0;
+    var dummy = try Managed.init(allocator);
+    defer dummy.deinit();
+    while (Managed.eql(try mod(allocator, d, two), zero)) {
+        // try d.divAssign(&two);
+        try Managed.divFloor(&d, &dummy, &d, &two);
+        r += 1;
     }
 
-    // Take any threshold number of shares
-    const reconstruction_shares = shares[0..SSSS.threshold];
+    // std.Random.DefaultPrng.init(init_s: u64)
+    // const rng = std.Random.DefaultPrng.init(0);
+    var a = try Managed.init(allocator);
+    defer a.deinit();
 
-    // Reconstruct the secret
-    const reconstructed_secret = try SSSS.reconstruct_secret(reconstruction_shares);
-    defer reconstructed_secret.deinit();
+    var n_minus_two = try Managed.init(allocator);
+    defer n_minus_two.deinit();
+    try Managed.sub(&n_minus_two, &n, &two);
 
-    try stdout.print("\nReconstructed secret: {d}\n", .{reconstructed_secret});
+    // std.debug.print("got here, {d}", .{r});
 
-    // Verify reconstruction
-    try stdout.print("Original secret: {d}\n", .{secret});
+    var test_result: bool = true;
+    for (0..k) |_| {
+        a = try mod(allocator, try generateSecureRandomBigInt(allocator, n.bitCountAbs()), n_minus_two);
+        std.debug.print("{any}\n", .{a});
+        try Managed.add(&a, &a, &two);
+        // try Managed.random(a, 2, &n, &rng);
+        if (!try miller_test(a, d, r, n, allocator)) {
+            // std.debug.print("test failed", .{});
+            test_result = false;
+            break;
+        }
+    }
+    return test_result;
 }
+
+fn mod_exp(
+    base: Managed,
+    exp: Managed,
+    mod_: Managed,
+    allocator: std.mem.Allocator,
+) !Managed {
+    var result = try Managed.initSet(allocator, 1);
+    var base_mod = try mod(allocator, base, mod_);
+    defer base_mod.deinit();
+
+    std.debug.print("result: {any}, base_mod: {any}\n", .{ result, base_mod });
+
+    var exp_copy = try Managed.clone(exp);
+    defer exp_copy.deinit();
+
+    std.debug.print("exp_copy: {any}\n", .{exp_copy});
+
+    var base_pow = try Managed.clone(base_mod);
+    defer base_pow.deinit();
+
+    std.debug.print("base_pow: {any}\n", .{base_pow});
+
+    var one = try Managed.initSet(allocator, 1);
+    defer one.deinit();
+    var two = try Managed.initSet(allocator, 2);
+    defer two.deinit();
+    var dummy = try Managed.init(allocator);
+    defer dummy.deinit();
+
+    while (!exp_copy.eqlZero()) {
+        if (Managed.eql(one, try mod(allocator, exp_copy, two))) {
+            try Managed.mul(&result, &result, &base_pow);
+            result = try mod(allocator, result, mod_);
+        }
+        try Managed.mul(&base_pow, &base_pow, &base_pow);
+        base_pow = try mod(allocator, base_pow, mod_);
+        try Managed.divFloor(&exp_copy, &dummy, &exp_copy, &two);
+
+        std.debug.print("exp_copy: {any}, base_pow: {any}, result: {any}\n", .{ exp_copy, base_pow, result });
+    }
+
+    return result;
+}
+
+// fn mod_exp(
+//     base: Managed,
+//     exp: Managed,
+//     mod_: Managed,
+//     allocator: std.mem.Allocator,
+// ) !Managed {
+//     var result = try Managed.initSet(allocator, 1);
+//     var base_mod = try mod(allocator, base, mod_);
+//     defer base_mod.deinit();
+
+//     var exp_copy = try Managed.clone(exp);
+//     defer exp_copy.deinit();
+
+//     var base_pow = try Managed.clone(base_mod);
+//     defer base_pow.deinit();
+
+//     var one = try Managed.initSet(allocator, 1);
+//     defer one.deinit();
+//     var two = try Managed.initSet(allocator, 2);
+//     defer two.deinit();
+//     var dummy = try Managed.init(allocator);
+//     defer dummy.deinit();
+
+//     while (!exp_copy.eqlZero()) {
+//         if (Managed.eql(one, try mod(allocator, exp_copy, two))) {
+//             try Managed.mul(&result, &result, &base_pow);
+//             result = try mod(allocator, result, mod_);
+//         }
+//         try Managed.mul(&base_pow, &base_pow, &base_pow);
+//         base_pow = try mod(allocator, base_pow, mod_);
+//         try Managed.divFloor(&exp_copy, &dummy, &exp_copy, &two);
+//     }
+
+//     // const final_result = try Managed.clone(result);
+//     // result.deinit();
+//     // return final_result;
+//     return result;
+// }
+
+fn miller_test(
+    a: Managed,
+    d: Managed,
+    r: u32,
+    n: Managed,
+    allocator: std.mem.Allocator,
+) !bool {
+    // const bigint = std.bigint;
+
+    std.debug.print("a: {any}, d: {any}, r: {d}, n: {any}\n", .{ a, d, r, n });
+
+    var x = try mod_exp(a, d, n, allocator);
+    defer x.deinit();
+
+    std.debug.print("x: {any}\n", .{x});
+
+    var one = try Managed.initSet(allocator, 1);
+    defer one.deinit();
+
+    var n_minus_one = try Managed.init(allocator);
+    try Managed.sub(&n_minus_one, &n, &one);
+    defer n_minus_one.deinit();
+
+    // if (x == one or x == try n.sub(&one)) return true;
+    if (Managed.eql(x, one) or Managed.eql(n_minus_one, x)) return true;
+
+    var i: u32 = 1;
+    var x_tmp = try Managed.init(allocator);
+    defer x_tmp.deinit();
+
+    while (i < r) {
+        try Managed.mul(&x, &x, &x_tmp);
+        // try x_tmp.remAssign(&n);
+        x_tmp = try mod(allocator, x_tmp, n);
+        // if (x_tmp == try n.sub(&one)) return true;
+        if (Managed.eql(x_tmp, n_minus_one)) return true;
+        // if (x_tmp == one) return false;
+        if (Managed.eql(x_tmp, one)) return false;
+        // try x.set(x_tmp);
+        x.deinit();
+        x = try Managed.clone(x_tmp);
+        i += 1;
+    }
+    return false;
+}
+
+pub fn main() !void {
+    // const stdout = std.io.getStdOut().writer();
+    const allocator = std.heap.page_allocator;
+
+    // var n = try Managed.initSet(allocator, 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000174295123051); // Replace with a large number if needed
+    // var n = try Managed.initSet(allocator, 8076345598969038563182858894921877); // Replace with a large number if needed
+    var n = try Managed.initSet(allocator, 1000273817); // Replace with a large number if needed
+    defer n.deinit();
+
+    const k: u32 = 20; // Number of iterations
+
+    if (try is_prime(n, k, allocator)) {
+        try stdout.print("The number is probably prime.\n", .{});
+    } else {
+        try stdout.print("The number is composite.\n", .{});
+    }
+
+    // const base = try Managed.initSet(allocator, 2);
+    // const exp = try Managed.initSet(allocator, 100);
+    // const mod_ = try Managed.initSet(allocator, 1000000001);
+    // const mod_ = try Managed.initSet(allocator, 672899287);
+
+    // std.debug.print("{any}\n", .{try mod_exp(base, exp, mod_, allocator)});
+}
+
+// pub fn main() !void {
+//     const allocator = std.heap.c_allocator;
+
+//     var secret = try Managed.init(allocator);
+//     defer secret.deinit();
+
+//     try secret.setString(10, "965362171271163594829743597482564660996437523167191222700987408470500128126609480027797509581266397721138520078334647253520455741370857905969136022897819664");
+
+//     var p = try generateRandomPrime(allocator, secret.bitCountAbs() + 1);
+//     // var p = try findNextPrime(allocator, secret);
+//     defer p.deinit();
+
+//     try stdout.print("Prime: {any}\n", .{p});
+
+//     var SSSS = ShamirsSecretSharingScheme.init(allocator, 7, 10, p);
+//     defer SSSS.deinit();
+
+//     const shares = try SSSS.compute_shares(secret);
+//     defer allocator.free(shares);
+
+//     try stdout.print("shares:\n", .{});
+//     for (shares) |share| {
+//         try stdout.print("({d}, {any})\n", .{ share.x, share.y });
+//     }
+
+//     // Take any threshold number of shares
+//     const reconstruction_shares = shares[0..SSSS.threshold];
+
+//     // Reconstruct the secret
+//     const reconstructed_secret = try SSSS.reconstruct_secret(reconstruction_shares);
+//     defer reconstructed_secret.deinit();
+
+//     try stdout.print("\nReconstructed secret: {d}\n", .{reconstructed_secret});
+
+//     // Verify reconstruction
+//     try stdout.print("Original secret: {d}\n", .{secret});
+// }
 
 pub const Share = struct {
     x: usize,
