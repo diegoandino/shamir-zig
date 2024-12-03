@@ -88,7 +88,7 @@ fn handleInit(req: *httpz.Request, res: *httpz.Response) !void {
                 allocator,
                 parsed.threshold,
                 parsed.total_shares,
-                try scheme.findNextPrime(allocator, secret)
+                try scheme.choosePrime(allocator, secret, 5)
             );
 
             try stdout.print("Parsed secret: {any}\n", .{secret});

@@ -269,7 +269,7 @@ fn printPolynomial(poly: []Managed) !void {
     try stdout.print("\n", .{});
 }
 
-fn choosePrime(allocator: std.mem.Allocator, secret: Managed, bits: u5) !Managed {
+pub fn choosePrime(allocator: std.mem.Allocator, secret: Managed, bits: u5) !Managed {
     var max = try Managed.init(allocator);
     defer max.deinit();
     const one: u32 = 1;
