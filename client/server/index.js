@@ -262,7 +262,7 @@ io.on('connection', (socket) => {
         body: body 
       }).then(x => x.json())
       
-      console.log("reveal result: ", res.secret)
+      console.log("reveal result: ", res)
 
       if (res.secret === 0 || res.success === false) {
         callback?.({ success: false, error: 'Invalid shares' });
