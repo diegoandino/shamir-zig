@@ -12,8 +12,9 @@ pub fn main() !void {
 
     try secret.setString(10, "965362171271163594829743597482564660996437523167191222700987408470500128126609480027797509581266397721138520078334647253520455741370857905969136022897819664");
 
-    const p = try choosePrime(allocator, secret, 5);
+    //const p = try choosePrime(allocator, secret, 5);
     // defer p.deinit();
+    const p = try Managed.initSet(allocator, 183098854021111014847049736753592024736470361678118789554475301745631375088715378516210127567721475050701458356229595682612785871218119030132494038812323674675191754254520929902435652804246223835744924311359135557055284166986509276141863517277803082748254617919368292882064785309132857263185347484302086739292988500047169223654972608638044813088228827991887702654217888042042623629474506427931229425050435230703091930962777260574838696196764199813120000000000000000000000000000000000000000000000000000000000000000000701);
 
     try stdout.print("Prime: {any}\n", .{p});
 
@@ -71,8 +72,6 @@ pub const ShamirsSecretSharingScheme = struct {
         const polynomial = try self.sample_random_polynomial(secret);
         defer self.allocator.free(polynomial);
 
-        //try printPolynomial(polynomial);
-
         var shares = try self.allocator.alloc(Share, self.num_shares);
         var i: usize = 0;
         while (i < shares.len) : (i += 1) {
@@ -85,18 +84,18 @@ pub const ShamirsSecretSharingScheme = struct {
     }
 
     fn evaluate_polynomial(self: ShamirsSecretSharingScheme, polynomial: []Managed, x: usize) !Managed {
-        var accum = try Managed.initSet(self.allocator, 0);
-        var X = try Managed.initSet(self.allocator, x);
-        var Q = try Managed.initSet(self.allocator, 0);
-        defer X.deinit();
-        defer Q.deinit();
+        var res = try Managed.initSet(self.allocator, 0);
+        var x_coor = try Managed.initSet(self.allocator, x);
+        var quotient = try Managed.initSet(self.allocator, 0);
+        defer x_coor.deinit();
+        defer quotient.deinit();
         var i = polynomial.len;
         while (i > 0) : (i -= 1) {
-            try Managed.mul(&accum, &accum, &X);
-            try Managed.add(&accum, &accum, &polynomial[i - 1]);
-            try Managed.divFloor(&Q, &accum, &accum, &self.prime);
+            try Managed.mul(&res, &res, &x_coor);
+            try Managed.add(&res, &res, &polynomial[i - 1]);
+            try Managed.divFloor(&quotient, &res, &res, &self.prime);
         }
-        return accum;
+        return res;
     }
 
     fn sample_random_polynomial(self: ShamirsSecretSharingScheme, secret: Managed) ![]Managed {
