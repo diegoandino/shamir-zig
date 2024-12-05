@@ -86,7 +86,6 @@ test "basic SSSS functionality" {
 
     var ssss = ShamirsSecretSharingScheme.init(allocator, 3, 5, p);
     defer ssss.deinit();
-    // Note: don't deinit p here as SSSS takes ownership
 
     const shares = try ssss.compute_shares(secret);
     defer allocator.free(shares);
@@ -110,7 +109,6 @@ test "edge cases and validation" {
 
         var ssss = ShamirsSecretSharingScheme.init(allocator, 4, 4, p);
         defer ssss.deinit();
-        // p is owned by ssss now
 
         const shares = try ssss.compute_shares(secret);
         defer allocator.free(shares);
@@ -134,7 +132,6 @@ test "reconstruction with different share combinations" {
 
     var ssss = ShamirsSecretSharingScheme.init(allocator, 3, 5, p);
     defer ssss.deinit();
-    // p is owned by ssss
 
     const shares = try ssss.compute_shares(secret);
     defer allocator.free(shares);
@@ -173,7 +170,6 @@ test "large numbers" {
 
     var ssss = ShamirsSecretSharingScheme.init(allocator, 5, 8, p);
     defer ssss.deinit();
-    // p is owned by ssss
 
     const shares = try ssss.compute_shares(secret);
     defer allocator.free(shares);
