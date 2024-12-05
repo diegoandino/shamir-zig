@@ -1,50 +1,17 @@
 const std = @import("std");
-const Managed = std.math.big.int.Managed;
-// const Mutable = std.math.big.int.Mutable;
 const rand = std.crypto.random;
 const stdout = std.io.getStdOut().writer();
-
-pub fn main() !void {
-    const allocator = std.heap.c_allocator;
-
-    var secret = try Managed.init(allocator);
-    defer secret.deinit();
-
-    try secret.setString(10, "965362171271163594829743597482564660996437523167191222700987408470500128126609480027797509581266397721138520078334647253520455741370857905969136022897819664");
-
-    //const p = try choosePrime(allocator, secret, 5);
-    // defer p.deinit();
-    const p = try Managed.initSet(allocator, 183098854021111014847049736753592024736470361678118789554475301745631375088715378516210127567721475050701458356229595682612785871218119030132494038812323674675191754254520929902435652804246223835744924311359135557055284166986509276141863517277803082748254617919368292882064785309132857263185347484302086739292988500047169223654972608638044813088228827991887702654217888042042623629474506427931229425050435230703091930962777260574838696196764199813120000000000000000000000000000000000000000000000000000000000000000000701);
-
-    try stdout.print("Prime: {any}\n", .{p});
-
-    var SSSS = ShamirsSecretSharingScheme.init(allocator, 10, 10, p);
-    defer SSSS.deinit();
-
-    const shares = try SSSS.compute_shares(secret);
-    defer allocator.free(shares);
-
-    try stdout.print("shares:\n", .{});
-    for (shares) |share| {
-        try stdout.print("({d}, {any})\n", .{ share.x, share.y });
-    }
-
-    // Take any threshold number of shares
-    const reconstruction_shares = shares[0..SSSS.threshold];
-
-    // Reconstruct the secret
-    const reconstructed_secret = try SSSS.reconstruct_secret(reconstruction_shares);
-    defer reconstructed_secret.deinit();
-
-    try stdout.print("\nReconstructed secret: {d}\n", .{reconstructed_secret});
-
-    // Verify reconstruction
-    try stdout.print("Original secret: {d}\n", .{secret});
-}
+const Managed = std.math.big.int.Managed;
 
 pub const Share = struct {
     x: usize,
     y: Managed,
+};
+
+const ExtendedEuclidResult = struct {
+    gcd: Managed,
+    s: Managed,
+    inv: Managed,
 };
 
 pub const ShamirsSecretSharingScheme = struct {
@@ -126,12 +93,10 @@ pub const ShamirsSecretSharingScheme = struct {
     }
 
     pub fn reconstruct_secret(self: ShamirsSecretSharingScheme, shares: []const Share) !*Managed {
-        // Verify we have enough shares
         if (shares.len < self.threshold) {
             return error.NotEnoughShares;
         }
 
-        // Initialize result
         var result = try self.allocator.create(Managed);
         errdefer self.allocator.destroy(result);
         result.* = try Managed.initSet(self.allocator, 0);
@@ -192,11 +157,7 @@ pub const ShamirsSecretSharingScheme = struct {
         return result.inv;
     }
 
-    const ExtendedEuclidResult = struct {
-        gcd: Managed,
-        s: Managed,
-        inv: Managed,
-    };
+    
 
     fn extend_euclid_algo(self: ShamirsSecretSharingScheme, num: Managed) !ExtendedEuclidResult {
         var r = try self.prime.clone();
@@ -410,28 +371,4 @@ fn isProbablyPrime(allocator: std.mem.Allocator, n: Managed) !bool {
     }
 
     return true;
-}
-
-test "verify random bigint properties" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
-    // Test different bit sizes
-    const test_sizes = [_]usize{ 64, 128, 256 };
-
-    for (test_sizes) |bits| {
-        // Generate random number
-        var random_big = try generateSecureRandomBigInt(allocator, bits);
-        defer random_big.deinit();
-
-        // Verify bit length
-        const actual_bits = try random_big.bitCountAbs();
-        try testing.expect(actual_bits <= bits);
-
-        // For sizes that are multiples of 8, we expect the bit length to be close to the requested size
-        if (bits % 8 == 0) {
-            const min_expected_bits = bits - 8; // Allow for leading zeros
-            try testing.expect(actual_bits >= min_expected_bits);
-        }
-    }
 }
